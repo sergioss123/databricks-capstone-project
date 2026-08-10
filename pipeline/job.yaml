@@ -1,0 +1,17 @@
+resources:
+  jobs:
+    Data_pipeline:
+      name: Data pipeline
+      trigger:
+        pause_status: UNPAUSED
+        periodic:
+          interval: 1
+          unit: DAYS
+      tasks:
+        - task_key: data_pipeline
+          notebook_task:
+            notebook_path: /Workspace/Users/jszr.1996@gmail.com/databricks-capstone-project/pipeline/data_pipeline
+            source: WORKSPACE
+      queue:
+        enabled: true
+      performance_target: PERFORMANCE_OPTIMIZED

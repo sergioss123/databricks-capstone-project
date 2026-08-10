@@ -7,9 +7,10 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from contextlib import contextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 import requests
@@ -23,6 +24,9 @@ REQUEST_LOG_TABLE = "paper_mcp_openalex_request_logs"
 _workspace_client = WorkspaceClient()
 _lakebase_scope = os.environ.get("LAKEBASE_SECRET_SCOPE", "database")
 _lakebase_key = os.environ.get("LAKEBASE_SECRET_KEY", "lakebase-url")
+
+# Cache embedding generator to avoid multiple initializations
+_embedding_generator_cache = None
 
 
 def _lakebase_url() -> str:
@@ -52,6 +56,16 @@ def run_write(sql: str, params: tuple | dict | None = None) -> int:
             cur.execute(sql, params)
             conn.commit()
             return cur.rowcount
+
+
+def run_write_returning(sql: str, params: tuple | dict | None = None) -> list[dict]:
+    """Execute INSERT/UPDATE with RETURNING clause and commit."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            result = cur.fetchall()
+            conn.commit()
+            return result
 
 
 class OpenAlexClient:
@@ -248,7 +262,7 @@ class PapersMCPHelperFunctions:
             )
             return existing[0]["id"]
 
-        inserted = run_query(
+        inserted = run_write_returning(
             """
             INSERT INTO papers (
                 openalex_id,
@@ -310,7 +324,7 @@ class PapersMCPHelperFunctions:
             return collection_id
 
         if collections_have_goal:
-            created = run_query(
+            created = run_write_returning(
                 """
                 INSERT INTO collections (user_id, learning_goal_id, name, description)
                 VALUES (%s, %s, %s, %s)
@@ -319,7 +333,7 @@ class PapersMCPHelperFunctions:
                 (user_id, goal_id, goal_title, goal_description),
             )
         else:
-            created = run_query(
+            created = run_write_returning(
                 """
                 INSERT INTO collections (user_id, name, description)
                 VALUES (%s, %s, %s)
@@ -718,23 +732,53 @@ class PapersMCPHelperFunctions:
             "papers": formatted,
         }
 
-    def create_user_reading_plan(
+    def create_collection_from_topic(
         self,
+        topic: str,
+        collection_name: str = "",
+        collection_description: str = "",
         user_id: str = "",
         user_email: str = "",
         user_name: str = "",
-        goal_id: str = "",
-        goal_title: str = "",
-        papers: Optional[list[dict]] = None,
+        learning_goal_id: str = "",
         max_papers: int = 10,
-        persist: bool = True,
+        min_citations: int = 0,
     ) -> dict:
-        """Create/refresh a reading plan for a user's learning goal following app.py process."""
-        goal_id = (goal_id or "").strip()
-        goal_title = (goal_title or "").strip()
-        papers = papers or []
+        """Search OpenAlex for papers on a topic and create a collection with enhanced ingestion.
+        
+        Args:
+            topic: Search query for OpenAlex (e.g., "transformer models NLP")
+            collection_name: Name for the collection (auto-generated from topic if empty)
+            collection_description: Optional description for the collection
+            user_id: User identifier
+            user_email: User email (alternative to user_id)
+            user_name: User name (alternative to user_id)
+            learning_goal_id: Optional learning goal to link the collection to
+            max_papers: Maximum number of papers to retrieve (1-50, default 10)
+            min_citations: Minimum citation count filter (default 0)
+            
+        Returns:
+            dict with status, collection details, and ingested papers
+        """
+        # Validate and normalize inputs
+        topic = (topic or "").strip()
+        if not topic:
+            return {
+                "status": "error",
+                "message": "Topic is required for collection creation",
+            }
+        
+        collection_name = (collection_name or "").strip()
+        if not collection_name:
+            # Auto-generate name from topic
+            collection_name = topic[:50] if len(topic) <= 50 else topic[:47] + "..."
+        
+        collection_description = (collection_description or "").strip()
+        learning_goal_id = (learning_goal_id or "").strip()
         max_papers = max(1, min(max_papers, 50))
+        min_citations = max(0, min_citations)
 
+        # Resolve user
         resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
         if not resolution.get("ok"):
             return resolution["result"]
@@ -743,161 +787,134 @@ class PapersMCPHelperFunctions:
         user_data = resolution["user"]
         resolved_user_id = user_data["id"]
 
-        if not goal_id and not goal_title:
+        # Search OpenAlex for papers matching the topic
+        logger.info(f"Searching OpenAlex for topic: {topic}")
+        search_response = self.openalex_client.search_works(
+            query=topic,
+            per_page=max_papers,
+        )
+        
+        if not search_response or not search_response.get("results"):
             return {
                 "status": "error",
-                "message": "Provide goal_id or goal_title to create a reading plan",
+                "message": f"No papers found for topic: {topic}",
+                "resolved_by": resolved_by,
+                "user": user_data,
             }
-
-        learning_goals_have_user = self._table_has_column("learning_goals", "user_id")
-        collections_have_goal = self._table_has_column("collections", "learning_goal_id")
-
-        if goal_id:
-            if learning_goals_have_user:
-                goal_rows = run_query(
-                    """
-                    SELECT id, title, description
-                    FROM learning_goals
-                    WHERE id = %s AND user_id = %s
-                    LIMIT 1
-                    """,
-                    (goal_id, resolved_user_id),
-                )
-            elif collections_have_goal:
-                goal_rows = run_query(
-                    """
-                    SELECT lg.id, lg.title, lg.description
-                    FROM learning_goals lg
-                    JOIN collections c ON c.learning_goal_id = lg.id
-                    WHERE lg.id = %s AND c.user_id = %s
-                    ORDER BY lg.updated_at DESC, lg.created_at DESC
-                    LIMIT 1
-                    """,
-                    (goal_id, resolved_user_id),
-                )
-            else:
-                goal_rows = run_query(
-                    """
-                    SELECT id, title, description
-                    FROM learning_goals
-                    WHERE id = %s
-                    LIMIT 1
-                    """,
-                    (goal_id,),
-                )
-        else:
-            if learning_goals_have_user:
-                goal_rows = run_query(
-                    """
-                    SELECT id, title, description
-                    FROM learning_goals
-                    WHERE user_id = %s
-                      AND LOWER(title) = LOWER(%s)
-                    ORDER BY updated_at DESC, created_at DESC
-                    LIMIT 2
-                    """,
-                    (resolved_user_id, goal_title),
-                )
-            elif collections_have_goal:
-                goal_rows = run_query(
-                    """
-                    SELECT lg.id, lg.title, lg.description
-                    FROM learning_goals lg
-                    JOIN collections c ON c.learning_goal_id = lg.id
-                    WHERE c.user_id = %s
-                      AND LOWER(lg.title) = LOWER(%s)
-                    ORDER BY lg.updated_at DESC, lg.created_at DESC
-                    LIMIT 2
-                    """,
-                    (resolved_user_id, goal_title),
-                )
-            else:
-                return {
-                    "status": "error",
-                    "message": "Cannot resolve user-scoped learning goal by title in this schema. Provide goal_id.",
-                }
-
-            if len(goal_rows) > 1:
-                return {
-                    "status": "error",
-                    "message": "Multiple learning goals matched this title. Use goal_id.",
-                    "matches": [
-                        {
-                            "id": row.get("id"),
-                            "title": row.get("title"),
-                        }
-                        for row in goal_rows
-                    ],
-                }
-
-        if not goal_rows:
-            return {
-                "status": "error",
-                "message": "Learning goal not found for user",
-            }
-
-        goal = goal_rows[0]
-        selected_goal_id = goal["id"]
-        goal_title = goal.get("title") or "Learning Goal"
-        goal_description = goal.get("description")
-
-        if papers:
-            # Mirror the initialize button flow: use client-provided found papers.
-            source = "provided"
-            candidate_papers: list[dict] = papers
-        else:
-            like_query = f"%{goal_title}%"
-            local_results = run_query(
-                """
-                SELECT
-                    id AS paper_id,
-                    openalex_id,
-                    title,
-                    abstract,
-                    publication_year,
-                    cited_by_count,
-                    doi,
-                    landing_page_url
-                FROM papers
-                WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
-                ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
-                LIMIT 20
-                """,
-                (like_query, like_query),
-            )
-
-            source = "local"
-            candidate_papers = local_results
-            if not candidate_papers:
-                response = self.openalex_client.search_works(query=goal_title, per_page=20)
-                candidate_papers = response.get("results", []) if response else []
-                source = "openalex"
-
+        
+        # Filter by minimum citations if specified
+        candidate_papers = search_response.get("results", [])
+        if min_citations > 0:
+            candidate_papers = [
+                paper for paper in candidate_papers
+                if (paper.get("cited_by_count") or 0) >= min_citations
+            ]
+        
         if not candidate_papers:
             return {
                 "status": "error",
-                "message": "No papers found to build a reading plan",
+                "message": f"No papers found with at least {min_citations} citations",
                 "resolved_by": resolved_by,
                 "user": user_data,
-                "goal": {"id": selected_goal_id, "title": goal_title},
             }
 
-        sorted_candidates = sorted(
-            candidate_papers,
-            key=lambda p: p.get("publication_year", 0) or 0,
-        )[:max_papers]
+        # Check if collections table supports learning goals
+        collections_have_goal = self._table_has_column("collections", "learning_goal_id")
+        
+        # Validate learning goal if provided
+        if learning_goal_id:
+            if not collections_have_goal:
+                return {
+                    "status": "error",
+                    "message": "Learning goal linking requires collections.learning_goal_id column",
+                }
+            
+            # Verify the learning goal exists and belongs to the user
+            goal_check = run_query(
+                """
+                SELECT id FROM learning_goals
+                WHERE id = %s AND user_id = %s
+                """,
+                (learning_goal_id, resolved_user_id)
+            )
+            
+            if not goal_check:
+                return {
+                    "status": "error",
+                    "message": f"Learning goal {learning_goal_id} not found or not owned by user",
+                }
 
-        collection_id = self._ensure_goal_collection(
-            user_id=resolved_user_id,
-            goal_id=selected_goal_id,
-            goal_title=goal_title,
-            goal_description=goal_description,
+        # Create or update collection
+        logger.info(f"Creating collection '{collection_name}' for user {resolved_user_id}")
+        
+        # Check if collection already exists with this name
+        existing_collection = run_query(
+            """
+            SELECT id FROM collections
+            WHERE user_id = %s AND name = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (resolved_user_id, collection_name)
         )
+        
+        if existing_collection:
+            # Update existing collection
+            collection_id = existing_collection[0]["id"]
+            logger.info(f"Collection {collection_id} already exists, updating...")
+            
+            if collections_have_goal:
+                run_write(
+                    """
+                    UPDATE collections
+                    SET description = COALESCE(NULLIF(%s, ''), description),
+                        learning_goal_id = COALESCE(NULLIF(%s, ''), learning_goal_id),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (collection_description, learning_goal_id or None, collection_id)
+                )
+            else:
+                run_write(
+                    """
+                    UPDATE collections
+                    SET description = COALESCE(NULLIF(%s, ''), description),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (collection_description, collection_id)
+                )
+        else:
+            # Create new collection
+            if collections_have_goal:
+                collection_result = run_write_returning(
+                    """
+                    INSERT INTO collections (user_id, learning_goal_id, name, description)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (resolved_user_id, learning_goal_id or None, collection_name, collection_description)
+                )
+            else:
+                collection_result = run_write_returning(
+                    """
+                    INSERT INTO collections (user_id, name, description)
+                    VALUES (%s, %s, %s)
+                    RETURNING id
+                    """,
+                    (resolved_user_id, collection_name, collection_description)
+                )
+            
+            collection_id = collection_result[0]["id"]
+            logger.info(f"Created new collection {collection_id}")
 
+        # Ingest papers and add to collection
         papers_ingested = 0
-        plan = []
+        papers_info = []
+        
+        logger.info(f"Ingesting {len(candidate_papers[:max_papers])} papers into collection...")
 
-        for order, paper_data in enumerate(sorted_candidates, start=1):
+        for paper_data in candidate_papers[:max_papers]:
             work = paper_data.get("work_data") or paper_data
             if not work:
                 continue
@@ -915,76 +932,78 @@ class PapersMCPHelperFunctions:
                     paper_id = existing[0]["id"]
 
             if not paper_id and normalized_openalex_id:
-                paper_id = self._upsert_paper_from_openalex_work(work)
+                # Try the new enhanced ingestion first
+                try:
+                    # Lazy import to avoid circular dependency
+                    from paper_ingestion_helpers import PaperIngestion
+                    
+                    paper_id = PaperIngestion.ingest_from_openalex(
+                        openalex_work=work,
+                        upsert=True,
+                        generate_chunks=True
+                    )
+                    if paper_id:
+                        logger.info(f"Paper {paper_id} ingested with full metadata and embeddings")
+                except Exception as ingestion_error:
+                    logger.warning(f"Enhanced ingestion failed, falling back to basic upsert: {ingestion_error}")
+                    paper_id = self._upsert_paper_from_openalex_work(work)
 
             if not paper_id:
                 continue
 
-            if collection_id:
-                run_write(
-                    """
-                    INSERT INTO collection_papers (collection_id, paper_id)
-                    VALUES (%s, %s)
-                    ON CONFLICT (collection_id, paper_id) DO NOTHING
-                    """,
-                    (collection_id, paper_id),
-                )
+            # Add paper to collection
+            run_write(
+                """
+                INSERT INTO collection_papers (collection_id, paper_id)
+                VALUES (%s, %s)
+                ON CONFLICT (collection_id, paper_id) DO NOTHING
+                """,
+                (collection_id, paper_id),
+            )
 
-            if persist:
-                run_write(
-                    """
-                    INSERT INTO reading_progress
-                        (user_id, paper_id, learning_goal_id, reading_order, status)
-                    VALUES (%s, %s, %s, %s, 'not_started')
-                    ON CONFLICT (user_id, paper_id)
-                    DO UPDATE SET
-                        learning_goal_id = EXCLUDED.learning_goal_id,
-                        reading_order = EXCLUDED.reading_order,
-                        updated_at = NOW()
-                    """,
-                    (resolved_user_id, paper_id, selected_goal_id, order),
-                )
-
-            paper_source = paper_data.get("source") or source
             papers_ingested += 1
-            plan.append(
+            papers_info.append(
                 {
                     "paper_id": paper_id,
                     "openalex_id": normalized_openalex_id,
                     "title": paper_data.get("title") or work.get("title") or work.get("display_name"),
-                    "order": order,
                     "publication_year": paper_data.get("publication_year") or work.get("publication_year"),
-                    "status": "not_started",
-                    "source": paper_source,
+                    "cited_by_count": paper_data.get("cited_by_count") or work.get("cited_by_count"),
+                    "doi": paper_data.get("doi") or work.get("doi"),
                 }
             )
 
         if papers_ingested == 0:
             return {
                 "status": "error",
-                "message": "No papers could be added to the reading plan",
+                "message": "No papers could be ingested into the collection",
                 "resolved_by": resolved_by,
                 "user": user_data,
-                "goal": {"id": selected_goal_id, "title": goal_title},
+                "collection": {
+                    "id": collection_id,
+                    "name": collection_name,
+                },
             }
 
+        logger.info(f"Successfully ingested {papers_ingested} papers into collection {collection_id}")
+        
         return {
             "status": "success",
+            "message": f"Created collection '{collection_name}' with {papers_ingested} papers",
             "resolved_by": resolved_by,
             "user": user_data,
-            "goal": {
-                "id": selected_goal_id,
-                "title": goal_title,
-                "description": goal_description,
-            },
             "collection": {
                 "id": collection_id,
-                "name": goal_title,
+                "name": collection_name,
+                "description": collection_description,
+                "learning_goal_id": learning_goal_id if learning_goal_id else None,
             },
-            "max_papers": max_papers,
-            "input_papers_count": len(candidate_papers),
-            "persisted": persist,
-            "papers_ingested": papers_ingested,
-            "count": len(plan),
-            "reading_plan": plan,
+            "search": {
+                "topic": topic,
+                "papers_found": len(candidate_papers),
+                "papers_ingested": papers_ingested,
+                "max_papers": max_papers,
+                "min_citations": min_citations,
+            },
+            "papers": papers_info,
         }

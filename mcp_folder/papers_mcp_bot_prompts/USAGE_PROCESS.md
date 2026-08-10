@@ -33,12 +33,13 @@ If missing, ask one targeted clarification question before calling tools.
 3. Highlight reading status and collection membership.
 4. If name resolves to multiple users, ask for `user_id` or `user_email`.
 
-### D) Create Reading Plan
-1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, goal_title, papers, max_papers, persist)`.
-2. Always provide goal context with `goal_id` or `goal_title`.
-3. When available, pass `papers` from the search step to replicate the initialize button flow (top oldest papers).
-4. Return goal, collection, and ordered reading plan entries.
-5. If `persist=true`, confirm that reading order was written to `reading_progress`.
+### D) Create Collection from Topic
+1. Call `create_collection_from_topic(topic, collection_name, collection_description, user_id, user_email, user_name, learning_goal_id, max_papers, min_citations)`.
+2. Provide a clear `topic` for OpenAlex search (required).
+3. Collection name is auto-generated from topic if not provided.
+4. Optionally link to a learning goal with `learning_goal_id`.
+5. Papers are automatically ingested with full metadata, embeddings, and semantic chunks.
+6. Return collection details with list of ingested papers.
 
 ### E) Raw OpenAlex
 1. Call `request_openalex_api(endpoint, params)`.

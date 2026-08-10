@@ -96,38 +96,44 @@ def search_user_papers(
 
 @mcp.tool
 @log_mcp_tool_call
-def create_user_reading_plan(
+def create_collection_from_topic(
+    topic: str,
+    collection_name: str = "",
+    collection_description: str = "",
     user_id: str = "",
     user_email: str = "",
     user_name: str = "",
-    goal_id: str = "",
-    goal_title: str = "",
-    papers: list[dict] | None = None,
+    learning_goal_id: str = "",
     max_papers: int = 10,
-    persist: bool = True,
+    min_citations: int = 0,
 ) -> dict:
     """
-    Create a prioritized reading plan for a user.
+    Search OpenAlex for papers on a topic and create a collection with full metadata ingestion.
 
     Args:
+        topic: Search query for OpenAlex (e.g., "transformer models NLP") - REQUIRED
+        collection_name: Name for the collection (auto-generated from topic if empty)
+        collection_description: Optional description for the collection
         user_id: Optional application user id
         user_email: Optional user email
         user_name: Optional user name (must resolve uniquely)
-        goal_id: Optional learning goal id
-        goal_title: Optional learning goal title (used when goal_id is not provided)
-        papers: Optional candidate paper payloads (same shape as initialize search results)
-        max_papers: Number of papers to include (1-50)
-        persist: If true, write reading_order into reading_progress
+        learning_goal_id: Optional learning goal to link the collection to
+        max_papers: Maximum number of papers to retrieve (1-50, default 10)
+        min_citations: Minimum citation count filter (default 0)
+        
+    Returns:
+        dict with status, collection details, and ingested papers list
     """
-    return papers_helper.create_user_reading_plan(
+    return papers_helper.create_collection_from_topic(
+        topic=topic,
+        collection_name=collection_name,
+        collection_description=collection_description,
         user_id=user_id,
         user_email=user_email,
         user_name=user_name,
-        goal_id=goal_id,
-        goal_title=goal_title,
-        papers=papers,
+        learning_goal_id=learning_goal_id,
         max_papers=max_papers,
-        persist=persist,
+        min_citations=min_citations,
     )
 
 
@@ -144,6 +150,6 @@ if __name__ == "__main__":
     logger.info("  2. get_paper_summary(openalex_id)")
     logger.info("  3. request_openalex_api(endpoint, params=None)")
     logger.info("  4. search_user_papers(user_id='', user_email='', user_name='', query='', limit=20)")
-    logger.info("  5. create_user_reading_plan(user_id='', user_email='', user_name='', goal_id='', goal_title='', papers=None, max_papers=10, persist=True)")
+    logger.info("  5. create_collection_from_topic(topic, collection_name='', collection_description='', user_id='', user_email='', user_name='', learning_goal_id='', max_papers=10, min_citations=0)")
 
     mcp.run(transport="http", host="0.0.0.0", port=port)

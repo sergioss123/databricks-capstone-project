@@ -18,26 +18,41 @@
 
     {% for goal in goals %}
     <div class="card" style="margin-bottom: 24px;">
-        <div style="display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px;">
+        <div style="margin-bottom: 16px;">
             <div>
                 <h2 style="margin-bottom: 8px;">{{ goal.title }}</h2>
                 {% if goal.description %}
                 <p style="color: #666; max-width: 820px;">{{ goal.description }}</p>
                 {% endif %}
-                <div style="margin-top: 12px; color: #666; font-size: 14px;">
-                    Reading plan: {{ goal.reading_plan_total }} papers · {{ goal.reading_plan_progress }}% complete
+            </div>
+        </div>
+
+        <div style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-bottom: 18px;">
+            <div style="border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
+                <div style="display: flex; justify-content: space-between; align-items: start; gap: 10px; flex-wrap: wrap; margin-bottom: 6px;">
+                    <div style="font-size: 12px; color: #667eea; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;">Reading Plan</div>
+                    <a href="{{ url_for('learning_goal_reading_plan', goal_id=goal.id) }}" class="btn btn-secondary" style="padding: 7px 10px; font-size: 12px;">Open Reading Plan</a>
+                </div>
+                <div style="color: #333; font-size: 14px;">
+                    {{ goal.reading_plan_total }} papers · {{ goal.reading_plan_progress }}% complete
                 </div>
                 {% if goal.reading_plan_preview %}
                 <div style="margin-top: 8px; color: #666; font-size: 13px;">
                     {{ goal.reading_plan_preview | join(' · ') }}
                 </div>
+                {% else %}
+                <div style="margin-top: 8px; color: #999; font-size: 13px;">No papers yet in this reading plan.</div>
                 {% endif %}
             </div>
-            <div style="min-width: 120px; text-align: right;">
-                <div style="font-size: 40px; font-weight: 700; color: #667eea;">{{ goal.collection_count }}</div>
-                <div style="color: #666;">Collections</div>
+
+            <div style="border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
+                <div style="font-size: 12px; color: #667eea; margin-bottom: 6px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;">Collections</div>
+                <div style="font-size: 30px; font-weight: 700; color: #667eea; line-height: 1; margin-bottom: 6px;">{{ goal.collection_count }}</div>
+                <div style="color: #666; font-size: 13px;">Collections linked to this goal</div>
             </div>
         </div>
+
+        <div style="font-size: 12px; color: #667eea; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;">Collections List</div>
 
         {% if goal.collections %}
         <div style="display: grid; gap: 12px;">
@@ -57,6 +72,9 @@
                             {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
                         </div>
                     </div>
+                    <div style="display: flex; align-items: center;">
+                        <a href="{{ url_for('collections') }}" class="btn btn-secondary" style="padding: 7px 10px; font-size: 12px;">Open Papers</a>
+                    </div>
                 </div>
             </div>
             {% endfor %}
@@ -65,9 +83,6 @@
         <p style="color: #999; margin-top: 8px;">No collections linked to this goal yet.</p>
         {% endif %}
 
-        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
-            <a href="{{ url_for('learning_goal_reading_plan', goal_id=goal.id) }}" class="btn btn-primary">Open Reading Plan</a>
-        </div>
     </div>
     {% endfor %}
 </div>

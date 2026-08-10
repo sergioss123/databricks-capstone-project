@@ -360,23 +360,76 @@ class PapersMCPHelperFunctions:
                 "params": query_params,
             }
 
-    def search_user_papers(self, user_id: str, query: str = "", limit: int = 20) -> dict:
-        """Find papers associated with a specific user (collections or reading plan)."""
+    def search_user_papers(
+        self,
+        user_id: str = "",
+        user_email: str = "",
+        user_name: str = "",
+        query: str = "",
+        limit: int = 20,
+    ) -> dict:
+        """Find papers associated with a user resolved by id, email, or name."""
         user_id = (user_id or "").strip()
+        user_email = (user_email or "").strip()
+        user_name = (user_name or "").strip()
         query = (query or "").strip()
         limit = max(1, min(limit, 100))
 
-        if not user_id:
-            return {"status": "error", "message": "user_id is required"}
+        if not user_id and not user_email and not user_name:
+            return {
+                "status": "error",
+                "message": "Provide one identifier: user_id, user_email, or user_name",
+            }
 
-        user_rows = run_query(
-            "SELECT id, email, name FROM users WHERE id = %s LIMIT 1",
-            (user_id,),
-        )
+        resolved_by = None
+        user_rows = []
+
+        if user_id:
+            resolved_by = "user_id"
+            user_rows = run_query(
+                "SELECT id, email, name FROM users WHERE id = %s LIMIT 1",
+                (user_id,),
+            )
+        elif user_email:
+            resolved_by = "user_email"
+            user_rows = run_query(
+                "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
+                (user_email,),
+            )
+        else:
+            resolved_by = "user_name"
+            # Names are not guaranteed unique, so detect ambiguous matches.
+            user_rows = run_query(
+                "SELECT id, email, name FROM users WHERE LOWER(name) = LOWER(%s) ORDER BY id LIMIT 3",
+                (user_name,),
+            )
+            if len(user_rows) > 1:
+                return {
+                    "status": "error",
+                    "message": "Multiple users found for this name. Use user_id or user_email.",
+                    "matches": [
+                        {
+                            "id": row.get("id"),
+                            "email": row.get("email"),
+                            "name": row.get("name"),
+                        }
+                        for row in user_rows
+                    ],
+                }
+
         if not user_rows:
-            return {"status": "error", "message": f"User not found: {user_id}"}
+            if user_id:
+                detail = user_id
+            elif user_email:
+                detail = user_email
+            else:
+                detail = user_name
+            return {"status": "error", "message": f"User not found: {detail}"}
 
-        params = [user_id, user_id]
+        user_row = user_rows[0]
+        resolved_user_id = str(user_row.get("id"))
+
+        params = [resolved_user_id, resolved_user_id]
         query_clause = ""
         if query:
             query_clause = " AND (p.title ILIKE %s OR COALESCE(p.abstract, '') ILIKE %s)"
@@ -431,9 +484,9 @@ class PapersMCPHelperFunctions:
                 }
             )
 
-        user_row = user_rows[0]
         return {
             "status": "success",
+            "resolved_by": resolved_by,
             "user": {
                 "id": user_row.get("id"),
                 "email": user_row.get("email"),

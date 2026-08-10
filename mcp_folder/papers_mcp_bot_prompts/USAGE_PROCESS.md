@@ -12,7 +12,7 @@ Map user request to one primary intent:
 ## 2. Validate Required Inputs
 - For topic discovery: require `topic`.
 - For paper summary: require `openalex_id`.
-- For user lookup: require `user_id`.
+- For user lookup: require one of `user_id`, `user_email`, or `user_name`.
 - For raw OpenAlex: require `endpoint`.
 
 If missing, ask one targeted clarification question before calling tools.
@@ -28,9 +28,10 @@ If missing, ask one targeted clarification question before calling tools.
 2. Return title, year, DOI/link, and concise summary.
 
 ### C) User Papers
-1. Call `search_user_papers(user_id, query, limit)`.
+1. Call `search_user_papers(user_id, user_email, user_name, query, limit)`.
 2. Return counts and list by recency/relevance from tool output.
 3. Highlight reading status and collection membership.
+4. If name resolves to multiple users, ask for `user_id` or `user_email`.
 
 ### D) Raw OpenAlex
 1. Call `request_openalex_api(endpoint, params)`.
@@ -42,7 +43,7 @@ If missing, ask one targeted clarification question before calling tools.
   - error message
   - one concrete retry option
 
-Example: "`search_user_papers` returned 'User not found'. Verify the `user_id` and retry."
+Example: "`search_user_papers` returned 'User not found'. Verify `user_id`, `user_email`, or `user_name` and retry."
 
 ## 5. Output Style
 - Keep output short and actionable.
@@ -57,6 +58,6 @@ Example: "`search_user_papers` returned 'User not found'. Verify the `user_id` a
 3. Ask which `openalex_id` to summarize.
 
 ### Example 2: "Show my papers about reinforcement learning"
-1. Require `user_id`.
-2. Call `search_user_papers(user_id, query="reinforcement learning", limit=20)`.
+1. Require one of `user_id`, `user_email`, or `user_name`.
+2. Call `search_user_papers(user_email="user@company.com", query="reinforcement learning", limit=20)`.
 3. Return matching items and statuses.

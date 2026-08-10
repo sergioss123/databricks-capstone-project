@@ -68,16 +68,30 @@ def request_openalex_api(endpoint: str, params: dict | None = None) -> dict:
 
 @mcp.tool
 @log_mcp_tool_call
-def search_user_papers(user_id: str, query: str = "", limit: int = 20) -> dict:
+def search_user_papers(
+    user_id: str = "",
+    user_email: str = "",
+    user_name: str = "",
+    query: str = "",
+    limit: int = 20,
+) -> dict:
     """
     Search papers connected to one user through collections or reading progress.
 
     Args:
-        user_id: Application user id from the users table
+        user_id: Optional application user id from the users table
+        user_email: Optional user email
+        user_name: Optional user name (must be unique)
         query: Optional text query to match title/abstract
         limit: Maximum papers to return (1-100)
     """
-    return papers_helper.search_user_papers(user_id=user_id, query=query, limit=limit)
+    return papers_helper.search_user_papers(
+        user_id=user_id,
+        user_email=user_email,
+        user_name=user_name,
+        query=query,
+        limit=limit,
+    )
 
 
 if __name__ == "__main__":
@@ -92,6 +106,6 @@ if __name__ == "__main__":
     logger.info("  1. search_topic(topic, per_page=10, min_citations=0)")
     logger.info("  2. get_paper_summary(openalex_id)")
     logger.info("  3. request_openalex_api(endpoint, params=None)")
-    logger.info("  4. search_user_papers(user_id, query='', limit=20)")
+    logger.info("  4. search_user_papers(user_id='', user_email='', user_name='', query='', limit=20)")
 
     mcp.run(transport="http", host="0.0.0.0", port=port)

@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional
 from flask import has_request_context, request
 
 try:
-    import lakebase
+    from papers_mcp_helper_functions import run_write
     LAKEBASE_AVAILABLE = True
 except ImportError:
     LAKEBASE_AVAILABLE = False
@@ -59,7 +59,7 @@ def _insert_log(
         input_json = json.dumps(input_parameters) if input_parameters else None
         summary = _truncate(output_json)
 
-        lakebase.run_write(
+        run_write(
             f"""
             INSERT INTO {TABLE_NAME} (
                 tool_name,
@@ -139,7 +139,7 @@ def ensure_log_table_exists() -> bool:
         return False
 
     try:
-        lakebase.run_write(
+        run_write(
             f"""
             CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
                 id BIGSERIAL PRIMARY KEY,

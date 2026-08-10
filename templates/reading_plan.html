@@ -10,10 +10,11 @@
             <p style="color: #666;">Create or refresh the plan, then track and update each paper status here.</p>
         </div>
         <div style="display: flex; gap: 10px;">
-            <button class="btn btn-primary" onclick="createReadingPlan()">Create / Refresh Reading Plan</button>
+            <button id="createPlanBtn" class="btn btn-primary" onclick="createReadingPlan()">Create / Refresh Reading Plan</button>
             <a href="{{ url_for('learning_goals') }}" class="btn btn-secondary">Back to Learning Goals</a>
         </div>
     </div>
+    <div id="createPlanFeedback" style="margin-top: -8px; margin-bottom: 16px; color: #666; font-size: 13px;"></div>
 
     <div class="card" style="margin-bottom: 24px;">
         <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center;">
@@ -68,9 +69,30 @@
         <p style="color: #666; margin: 8px 0 0;">Click "Create / Refresh Reading Plan" to generate the first 10 papers for this goal.</p>
     </div>
     {% endif %}
+
+    <div id="syncModal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 1000; padding: 24px; overflow-y: auto;">
+        <div style="max-width: 920px; margin: 24px auto; background: white; border-radius: 10px; padding: 20px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px;">
+                <h3 style="margin: 0;">New Recommended Papers (up to 25)</h3>
+                <button class="btn btn-secondary" type="button" onclick="closeSyncModal()">Close</button>
+            </div>
+            <p style="color: #666; margin-bottom: 12px;">Select the new papers you want to append to this reading plan.</p>
+            <div id="syncCandidatesList" style="display: grid; gap: 10px; max-height: 60vh; overflow-y: auto; padding-right: 4px;"></div>
+            <div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <div id="syncModalFeedback" style="font-size: 13px; color: #666;"></div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-secondary" type="button" onclick="toggleAllSyncCandidates(true)">Select All</button>
+                    <button class="btn btn-secondary" type="button" onclick="toggleAllSyncCandidates(false)">Clear</button>
+                    <button id="addSelectedBtn" class="btn btn-primary" type="button" onclick="addSelectedPapersToPlan()">Add Selected Papers</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>
+let syncCandidates = [];
+
 function updatePaperStatus(paperId, status) {
     fetch('/api/paper/update-status', {
         method: 'POST',
@@ -92,22 +114,155 @@ function updatePaperStatus(paperId, status) {
 }
 
 function createReadingPlan() {
-    fetch('/api/learning-goals/{{ goal.id }}/create-reading-plan', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'}
+    const button = document.getElementById('createPlanBtn');
+    const feedback = document.getElementById('createPlanFeedback');
+    button.disabled = true;
+    button.textContent = 'Creating...';
+    feedback.style.color = '#666';
+    feedback.textContent = 'Looking for up to 25 new recommended papers...';
+
+    fetch('/api/learning-goals/{{ goal.id }}/sync-candidates')
+    .then(async resp => {
+        const data = await resp.json();
+        return { ok: resp.ok, data };
     })
-    .then(resp => resp.json())
-    .then(data => {
-        if (data.success) {
-            window.location.reload();
+    .then(({ ok, data }) => {
+        if (!ok || !data.success) {
+            feedback.style.color = '#b00020';
+            feedback.textContent = data.error || 'Failed to fetch new recommendations';
+            return;
+        }
+
+        syncCandidates = data.papers || [];
+        if (!syncCandidates.length) {
+            feedback.style.color = '#666';
+            feedback.textContent = 'No new papers found to sync.';
+            return;
         } else {
-            alert(data.error || 'Failed to create reading plan');
+            feedback.style.color = '#2e7d32';
+            feedback.textContent = `${syncCandidates.length} new papers found.`;
+            openSyncModal(syncCandidates);
         }
     })
     .catch(err => {
         console.error(err);
-        alert('Failed to create reading plan');
+        feedback.style.color = '#b00020';
+        feedback.textContent = 'Failed to fetch new recommendations';
+    })
+    .finally(() => {
+        button.disabled = false;
+        button.textContent = 'Create / Refresh Reading Plan';
     });
+}
+
+function openSyncModal(candidates) {
+    const modal = document.getElementById('syncModal');
+    const list = document.getElementById('syncCandidatesList');
+    const modalFeedback = document.getElementById('syncModalFeedback');
+    list.innerHTML = '';
+    modalFeedback.textContent = '';
+
+    candidates.forEach((paper, index) => {
+        const card = document.createElement('label');
+        card.style.display = 'block';
+        card.style.padding = '12px';
+        card.style.border = '1px solid #ececec';
+        card.style.borderRadius = '8px';
+        card.style.background = '#fafafa';
+        card.innerHTML = `
+            <div style="display: flex; gap: 10px; align-items: start;">
+                <input type="checkbox" class="sync-candidate" value="${index}" checked style="margin-top: 4px;">
+                <div>
+                    <div style="font-weight: 600; color: #223;">${escapeHtml(paper.title || 'Untitled paper')}</div>
+                    <div style="font-size: 13px; color: #777; margin-top: 4px;">
+                        ${paper.publication_year ? paper.publication_year : ''}
+                        ${paper.cited_by_count !== undefined && paper.cited_by_count !== null ? ` · ${paper.cited_by_count} citations` : ''}
+                        ${paper.source ? ` · ${paper.source}` : ''}
+                    </div>
+                    ${paper.abstract ? `<p style="font-size: 13px; color: #666; margin-top: 6px;">${escapeHtml(paper.abstract)}</p>` : ''}
+                </div>
+            </div>
+        `;
+        list.appendChild(card);
+    });
+
+    modal.style.display = 'block';
+}
+
+function closeSyncModal() {
+    document.getElementById('syncModal').style.display = 'none';
+}
+
+function toggleAllSyncCandidates(checked) {
+    document.querySelectorAll('.sync-candidate').forEach(el => {
+        el.checked = checked;
+    });
+}
+
+function addSelectedPapersToPlan() {
+    const addButton = document.getElementById('addSelectedBtn');
+    const modalFeedback = document.getElementById('syncModalFeedback');
+    const checkedIndexes = [...document.querySelectorAll('.sync-candidate:checked')].map(el => Number(el.value));
+
+    if (!checkedIndexes.length) {
+        modalFeedback.style.color = '#b00020';
+        modalFeedback.textContent = 'Select at least one paper to add.';
+        return;
+    }
+
+    const selectedPapers = checkedIndexes
+        .map(i => syncCandidates[i])
+        .filter(Boolean);
+
+    addButton.disabled = true;
+    addButton.textContent = 'Adding...';
+    modalFeedback.style.color = '#666';
+    modalFeedback.textContent = 'Adding selected papers to reading plan...';
+
+    fetch('/api/learning-goals/{{ goal.id }}/add-papers', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ papers: selectedPapers })
+    })
+    .then(async resp => {
+        const data = await resp.json();
+        return { ok: resp.ok, data };
+    })
+    .then(({ ok, data }) => {
+        if (!ok || !data.success) {
+            modalFeedback.style.color = '#b00020';
+            modalFeedback.textContent = data.error || 'Failed to add papers';
+            return;
+        }
+
+        if (!data.papers_added) {
+            modalFeedback.style.color = '#666';
+            modalFeedback.textContent = 'No new papers were added.';
+            return;
+        }
+
+        modalFeedback.style.color = '#2e7d32';
+        modalFeedback.textContent = `${data.papers_added} papers added successfully.`;
+        window.location.reload();
+    })
+    .catch(err => {
+        console.error(err);
+        modalFeedback.style.color = '#b00020';
+        modalFeedback.textContent = 'Failed to add papers';
+    })
+    .finally(() => {
+        addButton.disabled = false;
+        addButton.textContent = 'Add Selected Papers';
+    });
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }
 </script>
 {% endblock %}

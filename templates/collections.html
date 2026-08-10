@@ -114,7 +114,31 @@
                             {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
                         </div>
                     </div>
+                    <div style="display: flex; align-items: center;">
+                        <button class="btn btn-secondary" type="button" onclick="toggleCollectionPapers('{{ collection.id }}')" id="toggleBtn-{{ collection.id }}">Open Papers</button>
+                    </div>
                 </div>
+
+                {% if collection.papers %}
+                <div style="display: none; gap: 12px; margin-top: 14px;" id="collectionPapers-{{ collection.id }}">
+                    {% for paper in collection.papers %}
+                    <div style="border: 1px solid #ececec; border-left: 4px solid #667eea; border-radius: 8px; padding: 14px 16px; background: #fff;">
+                        <div style="font-size: 12px; color: #888; margin-bottom: 6px;">Paper in collection</div>
+                        <a href="{{ url_for('paper_workspace', paper_id=paper.id) }}" style="font-size: 16px; font-weight: 600; color: #223; text-decoration: none;">
+                            {{ paper.title }}
+                        </a>
+                        <div style="color: #777; font-size: 13px; margin-top: 6px;">
+                            {% if paper.doi %}DOI: {{ paper.doi }}{% endif %}
+                        </div>
+                        {% if paper.summary %}
+                        <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.summary }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="color: #999; margin-top: 12px;">No papers in this collection yet.</p>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -160,6 +184,16 @@ function createCollection() {
         console.error(err);
         alert('Failed to create collection');
     });
+}
+
+function toggleCollectionPapers(collectionId) {
+    const panel = document.getElementById(`collectionPapers-${collectionId}`);
+    const button = document.getElementById(`toggleBtn-${collectionId}`);
+    if (!panel || !button) return;
+
+    const isHidden = panel.style.display === 'none' || panel.style.display === '';
+    panel.style.display = isHidden ? 'grid' : 'none';
+    button.textContent = isHidden ? 'Hide Papers' : 'Open Papers';
 }
 </script>
 {% endblock %}

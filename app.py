@@ -162,9 +162,13 @@ def create_goal_reading_plan(user_id: str, goal_id: str, papers: list, max_paper
                 continue
 
             openalex_id = work.get('id') or paper_data.get('openalex_id')
-            paper_id = None
+            paper_id = paper_data.get('paper_id')
 
-            if openalex_id:
+            # Local paper candidates already have internal paper ids.
+            if not paper_id and isinstance(work.get('id'), str) and not work.get('id', '').startswith('https://openalex.org/'):
+                paper_id = work.get('id')
+
+            if openalex_id and not paper_id:
                 try:
                     paper_id = PaperIngestion.ingest_from_openalex(openalex_work=work, upsert=True)
                 except Exception as ingest_error:
@@ -230,6 +234,174 @@ def create_goal_reading_plan(user_id: str, goal_id: str, papers: list, max_paper
         'success': True,
         'papers_ingested': papers_ingested,
         'reading_plan': reading_plan,
+        'goal_id': goal_id,
+        'collection_id': collection_id,
+        'collection_name': collection_name
+    }
+
+
+def add_new_papers_to_goal_reading_plan(user_id: str, goal_id: str, papers: list, max_papers: int = 25) -> dict:
+    """Append only new papers to a goal reading plan without altering existing papers."""
+    if not user_id or not goal_id:
+        raise ValueError("Missing required user_id or goal_id")
+    if not papers:
+        return {
+            'success': True,
+            'papers_added': 0,
+            'added_papers': [],
+            'goal_id': goal_id,
+        }
+
+    goal_row = lakebase.run_query(
+        "SELECT id, title, description FROM learning_goals WHERE id = %s AND user_id = %s",
+        (goal_id, user_id)
+    )
+    if not goal_row:
+        raise ValueError("Learning goal not found for user")
+
+    goal_title = goal_row[0]['title']
+    goal_description = goal_row[0].get('description')
+    collection_name = goal_title
+    collections_have_goal = table_has_column('collections', 'learning_goal_id')
+
+    collection_id = None
+    with lakebase.get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id FROM collections
+                WHERE user_id = %s AND name = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (user_id, collection_name)
+            )
+            existing_collection = cur.fetchone()
+
+            if existing_collection:
+                collection_id = existing_collection['id']
+                if collections_have_goal:
+                    cur.execute(
+                        """
+                        UPDATE collections
+                        SET learning_goal_id = %s,
+                            description = COALESCE(NULLIF(%s, ''), description),
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (goal_id, goal_description or '', collection_id)
+                    )
+            else:
+                if collections_have_goal:
+                    cur.execute(
+                        """
+                        INSERT INTO collections (user_id, learning_goal_id, name, description)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user_id, goal_id, collection_name, goal_description)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO collections (user_id, name, description)
+                        VALUES (%s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user_id, collection_name, goal_description)
+                    )
+                created_collection = cur.fetchone()
+                collection_id = created_collection['id'] if created_collection else None
+            conn.commit()
+
+    existing_plan_rows = lakebase.run_query(
+        """
+        SELECT rp.paper_id, rp.reading_order
+        FROM reading_progress rp
+        WHERE rp.user_id = %s AND rp.learning_goal_id = %s
+        """,
+        (user_id, goal_id)
+    )
+    existing_paper_ids = {row['paper_id'] for row in existing_plan_rows}
+    next_order = max((row.get('reading_order') or 0 for row in existing_plan_rows), default=0) + 1
+
+    added_papers = []
+    for paper_data in papers[:max_papers]:
+        try:
+            work = paper_data.get('work_data') or paper_data
+            if not work:
+                continue
+
+            openalex_id = work.get('id') or paper_data.get('openalex_id')
+            paper_id = paper_data.get('paper_id')
+
+            if not paper_id and isinstance(work.get('id'), str) and not work.get('id', '').startswith('https://openalex.org/'):
+                paper_id = work.get('id')
+
+            if openalex_id and not paper_id:
+                try:
+                    paper_id = PaperIngestion.ingest_from_openalex(openalex_work=work, upsert=True)
+                except Exception as ingest_error:
+                    logger.error(f"Error ingesting paper {paper_data.get('title')}: {ingest_error}")
+
+            if not paper_id and openalex_id:
+                existing_paper = lakebase.run_query(
+                    "SELECT id FROM papers WHERE openalex_id = %s LIMIT 1",
+                    (openalex_id.replace('https://openalex.org/', ''),)
+                )
+                if existing_paper:
+                    paper_id = existing_paper[0]['id']
+
+            if not paper_id or paper_id in existing_paper_ids:
+                continue
+
+            if collection_id:
+                with lakebase.get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO collection_papers (collection_id, paper_id)
+                            VALUES (%s, %s)
+                            ON CONFLICT (collection_id, paper_id) DO NOTHING
+                            """,
+                            (collection_id, paper_id)
+                        )
+                        conn.commit()
+
+            with lakebase.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO reading_progress
+                            (user_id, paper_id, learning_goal_id, reading_order, status)
+                        VALUES (%s, %s, %s, %s, 'not_started')
+                        ON CONFLICT (user_id, paper_id)
+                        DO UPDATE SET
+                            learning_goal_id = EXCLUDED.learning_goal_id,
+                            reading_order = COALESCE(reading_progress.reading_order, EXCLUDED.reading_order),
+                            updated_at = now()
+                        RETURNING id
+                        """,
+                        (user_id, paper_id, goal_id, next_order)
+                    )
+                    cur.fetchone()
+                    conn.commit()
+
+            added_papers.append({
+                'paper_id': paper_id,
+                'title': paper_data.get('title') or work.get('title') or work.get('display_name'),
+                'reading_order': next_order
+            })
+            existing_paper_ids.add(paper_id)
+            next_order += 1
+        except Exception as e:
+            logger.exception(f"Error appending paper to reading plan: {e}")
+            continue
+
+    return {
+        'success': True,
+        'papers_added': len(added_papers),
+        'added_papers': added_papers,
         'goal_id': goal_id,
         'collection_id': collection_id,
         'collection_name': collection_name
@@ -1584,20 +1756,188 @@ def api_create_learning_goal_reading_plan(goal_id):
     goal = goal_rows[0]
 
     try:
-        response = openalex_client.search_works(query=goal['title'], per_page=30)
-        results = response.get('results', []) if response else []
-        if not results:
+        like_query = f"%{goal['title']}%"
+        local_results = lakebase.run_query(
+            """
+            SELECT
+                id AS paper_id,
+                title,
+                abstract,
+                publication_year,
+                cited_by_count,
+                doi,
+                landing_page_url
+            FROM papers
+            WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
+            ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
+            LIMIT 20
+            """,
+            (like_query, like_query)
+        )
+
+        if local_results:
+            candidate_papers = local_results
+        else:
+            response = openalex_client.search_works(query=goal['title'], per_page=20)
+            candidate_papers = response.get('results', []) if response else []
+
+        if not candidate_papers:
             return jsonify({'success': False, 'error': 'No papers found to build a reading plan'}), 400
 
         plan_result = create_goal_reading_plan(
             user_id=user['id'],
             goal_id=goal_id,
-            papers=results,
+            papers=candidate_papers,
             max_papers=10
         )
+
+        if plan_result.get('papers_ingested', 0) == 0:
+            return jsonify({'success': False, 'error': 'No papers could be added to the reading plan'}), 400
+
         return jsonify(plan_result)
     except Exception as e:
         logger.exception(f"Error creating learning-goal reading plan for {goal_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route("/api/learning-goals/<goal_id>/sync-candidates", methods=['GET'])
+@require_login
+def api_learning_goal_sync_candidates(goal_id):
+    """Return up to 25 recommended papers that are not yet in the goal reading plan."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'success': False, 'error': 'Not logged in'}), 401
+
+    goal_rows = lakebase.run_query(
+        """
+        SELECT id, title, description
+        FROM learning_goals
+        WHERE id = %s AND user_id = %s
+        LIMIT 1
+        """,
+        (goal_id, user['id'])
+    )
+    if not goal_rows:
+        return jsonify({'success': False, 'error': 'Learning goal not found'}), 404
+    goal = goal_rows[0]
+
+    existing_rows = lakebase.run_query(
+        """
+        SELECT rp.paper_id, p.openalex_id
+        FROM reading_progress rp
+        JOIN papers p ON p.id = rp.paper_id
+        WHERE rp.user_id = %s AND rp.learning_goal_id = %s
+        """,
+        (user['id'], goal_id)
+    )
+    existing_paper_ids = {row['paper_id'] for row in existing_rows}
+    existing_openalex_ids = {row['openalex_id'] for row in existing_rows if row.get('openalex_id')}
+
+    like_query = f"%{goal['title']}%"
+    local_results = lakebase.run_query(
+        """
+        SELECT
+            id AS paper_id,
+            openalex_id,
+            title,
+            abstract,
+            publication_year,
+            cited_by_count,
+            doi,
+            landing_page_url
+        FROM papers
+        WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
+        ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
+        LIMIT 25
+        """,
+        (like_query, like_query)
+    )
+
+    candidates = []
+    candidate_titles = set()
+    for row in local_results:
+        if row['paper_id'] in existing_paper_ids:
+            continue
+        title_key = (row.get('title') or '').strip().lower()
+        if not title_key or title_key in candidate_titles:
+            continue
+        candidate_titles.add(title_key)
+        candidates.append({
+            'paper_id': row['paper_id'],
+            'openalex_id': row.get('openalex_id'),
+            'title': row.get('title'),
+            'abstract': summarize_abstract(row.get('abstract')),
+            'publication_year': row.get('publication_year'),
+            'cited_by_count': row.get('cited_by_count'),
+            'doi': row.get('doi'),
+            'landing_page_url': row.get('landing_page_url'),
+            'source': 'local',
+        })
+
+    if len(candidates) < 25:
+        response = openalex_client.search_works(query=goal['title'], per_page=25)
+        openalex_results = response.get('results', []) if response else []
+        for work in openalex_results:
+            normalized_openalex_id = (work.get('id') or '').replace('https://openalex.org/', '')
+            if not normalized_openalex_id or normalized_openalex_id in existing_openalex_ids:
+                continue
+
+            title = work.get('title') or work.get('display_name')
+            title_key = (title or '').strip().lower()
+            if not title_key or title_key in candidate_titles:
+                continue
+
+            abstract_text = ''
+            if work.get('abstract_inverted_index'):
+                abstract_text = openalex_client.reconstruct_abstract(work['abstract_inverted_index'])
+
+            candidate_titles.add(title_key)
+            candidates.append({
+                'openalex_id': normalized_openalex_id,
+                'title': title,
+                'abstract': summarize_abstract(abstract_text),
+                'publication_year': work.get('publication_year'),
+                'cited_by_count': work.get('cited_by_count'),
+                'doi': work.get('doi'),
+                'landing_page_url': work.get('primary_location', {}).get('landing_page_url'),
+                'work_data': work,
+                'source': 'openalex',
+            })
+
+            if len(candidates) >= 25:
+                break
+
+    return jsonify({
+        'success': True,
+        'goal_id': goal_id,
+        'count': len(candidates),
+        'papers': candidates[:25],
+    })
+
+
+@app.route("/api/learning-goals/<goal_id>/add-papers", methods=['POST'])
+@require_login
+def api_learning_goal_add_papers(goal_id):
+    """Add selected recommended papers to an existing reading plan (append only)."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'success': False, 'error': 'Not logged in'}), 401
+
+    data = request.json or {}
+    papers = data.get('papers') or []
+    if not papers:
+        return jsonify({'success': False, 'error': 'No papers selected'}), 400
+
+    try:
+        result = add_new_papers_to_goal_reading_plan(
+            user_id=user['id'],
+            goal_id=goal_id,
+            papers=papers,
+            max_papers=25,
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.exception(f"Error adding papers to reading plan for {goal_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route("/collections")

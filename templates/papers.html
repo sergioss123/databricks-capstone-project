@@ -40,7 +40,7 @@
             <div style="padding: 14px 16px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa;">
                 <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: start;">
                     <div style="flex: 1; min-width: 0;">
-                        <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
+                        <a href="{{ url_for('paper_workspace', paper_id=paper.id) }}" style="font-weight: 600; color: #223; text-decoration: none;">
                             {{ paper.title }}
                         </a>
                         {% if paper.doi %}

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Paper Workspace - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 960px; margin: 0 auto;">
+    <div style="margin-bottom: 24px; display: flex; justify-content: space-between; gap: 12px; align-items: end; flex-wrap: wrap;">
+        <div>
+            <h1 style="margin-bottom: 8px;">📝 Paper Workspace</h1>
+            <p style="color: #666;">Update reading status and save your notes for this paper.</p>
+        </div>
+        <a href="{{ url_for('learning_goals') }}" class="btn btn-secondary">Back</a>
+    </div>
+
+    <div class="card" style="margin-bottom: 18px;">
+        <h2 style="margin-bottom: 8px;">{{ paper.title }}</h2>
+        <div style="color: #666; font-size: 13px; margin-bottom: 10px;">
+            {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
+            {% if paper.doi %} · DOI: {{ paper.doi }}{% endif %}
+            {% if paper.goal_title %} · Goal: {{ paper.goal_title }}{% endif %}
+        </div>
+
+        <div style="margin-bottom: 12px;">
+            <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
+                Open paper link
+            </a>
+        </div>
+
+        {% if paper.summary %}
+        <div style="padding: 12px 14px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa; margin-bottom: 12px;">
+            <div style="font-size: 12px; color: #667eea; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 6px;">API Summary</div>
+            <p style="margin: 0; color: #444; line-height: 1.6;">{{ paper.summary }}</p>
+        </div>
+        {% endif %}
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
+            <button class="btn btn-secondary" onclick="updatePaperStatus('{{ paper.id }}', 'not_started')">Not Started</button>
+            <button class="btn btn-primary" onclick="updatePaperStatus('{{ paper.id }}', 'in_progress')">In Progress</button>
+            <button class="btn" style="background: #4caf50; color: white;" onclick="updatePaperStatus('{{ paper.id }}', 'completed')">Completed</button>
+        </div>
+        <div style="font-size: 13px; color: #666;">Current status: <strong id="statusLabel">{{ paper.status | default('not_started') | replace('_', ' ') | title }}</strong></div>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-bottom: 10px;">Your Notes</h3>
+        <textarea id="notesContent" class="form-control" rows="10" placeholder="Write your notes about this paper here...">{{ note_content }}</textarea>
+        <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center;">
+            <button class="btn btn-primary" onclick="saveNotes('{{ paper.id }}')">Save Notes</button>
+            <span id="noteFeedback" style="font-size: 13px; color: #666;"></span>
+        </div>
+    </div>
+</div>
+
+<script>
+function updatePaperStatus(paperId, status) {
+    fetch('/api/paper/update-status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ paper_id: paperId, status: status })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (!data.success) {
+            alert(data.error || 'Failed to update status');
+            return;
+        }
+        const label = document.getElementById('statusLabel');
+        label.textContent = status.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Failed to update status');
+    });
+}
+
+function saveNotes(paperId) {
+    const content = document.getElementById('notesContent').value.trim();
+    const feedback = document.getElementById('noteFeedback');
+
+    fetch('/api/paper/save-note', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ paper_id: paperId, content: content })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (!data.success) {
+            feedback.style.color = '#b00020';
+            feedback.textContent = data.error || 'Failed to save notes';
+            return;
+        }
+        feedback.style.color = '#2e7d32';
+        feedback.textContent = 'Notes saved';
+    })
+    .catch(err => {
+        console.error(err);
+        feedback.style.color = '#b00020';
+        feedback.textContent = 'Failed to save notes';
+    });
+}
+</script>
+{% endblock %}

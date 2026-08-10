@@ -24,6 +24,14 @@
                 {% if goal.description %}
                 <p style="color: #666; max-width: 820px;">{{ goal.description }}</p>
                 {% endif %}
+                <div style="margin-top: 12px; color: #666; font-size: 14px;">
+                    Reading plan: {{ goal.reading_plan_total }} papers · {{ goal.reading_plan_progress }}% complete
+                </div>
+                {% if goal.reading_plan_preview %}
+                <div style="margin-top: 8px; color: #666; font-size: 13px;">
+                    {{ goal.reading_plan_preview | join(' · ') }}
+                </div>
+                {% endif %}
             </div>
             <div style="min-width: 120px; text-align: right;">
                 <div style="font-size: 40px; font-weight: 700; color: #667eea;">{{ goal.collection_count }}</div>
@@ -56,6 +64,10 @@
         {% else %}
         <p style="color: #999; margin-top: 8px;">No collections linked to this goal yet.</p>
         {% endif %}
+
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+            <a href="{{ url_for('learning_goal_reading_plan', goal_id=goal.id) }}" class="btn btn-primary">Open Reading Plan</a>
+        </div>
     </div>
     {% endfor %}
 </div>

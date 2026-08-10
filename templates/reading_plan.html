@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Reading Plan - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto;">
+    <div style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap;">
+        <div>
+            <h1 style="margin-bottom: 8px;">📖 {{ goal.title }} Reading Plan</h1>
+            <p style="color: #666;">Create or refresh the plan, then track and update each paper status here.</p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn btn-primary" onclick="createReadingPlan()">Create / Refresh Reading Plan</button>
+            <a href="{{ url_for('learning_goals') }}" class="btn btn-secondary">Back to Learning Goals</a>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <div>
+                <h3 style="margin-bottom: 6px;">Progress Overview</h3>
+                <p style="color: #666;">{{ progress }}% complete · {{ completed_papers }} completed · {{ in_progress_papers }} in progress · {{ total_papers }} total</p>
+            </div>
+            <div style="min-width: 240px; width: 100%; max-width: 420px;">
+                <div style="background: #e8e8e8; border-radius: 999px; height: 12px; overflow: hidden;">
+                    <div style="width: {{ progress }}%; height: 100%; background: linear-gradient(135deg, #667eea, #764ba2);"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if reading_plan %}
+    <div style="display: grid; gap: 12px;">
+        {% for paper in reading_plan %}
+        <div style="border: 1px solid #ececec; border-left: 4px solid {% if paper.status == 'completed' %}#4caf50{% elif paper.status == 'in_progress' %}#ff9800{% else %}#667eea{% endif %}; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
+            <div style="display: flex; justify-content: space-between; gap: 12px; align-items: start; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-size: 12px; color: #888; margin-bottom: 6px;">
+                        {% if paper.reading_order %}Paper {{ paper.reading_order }}{% else %}Reading Plan Paper{% endif %}
+                    </div>
+                    <a href="{{ url_for('paper_workspace', paper_id=paper.paper_id) }}" style="font-size: 16px; font-weight: 600; color: #223; text-decoration: none;">
+                        {{ paper.title }}
+                    </a>
+                    <div style="color: #777; font-size: 13px; margin-top: 6px;">
+                        {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
+                        {% if paper.cited_by_count is not none %} · {{ paper.cited_by_count }} citations{% endif %}
+                        {% if paper.last_read_at %} · last read {{ paper.last_read_at }}{% endif %}
+                    </div>
+                    {% if paper.summary %}
+                    <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.summary }}</p>
+                    {% endif %}
+                </div>
+                <div style="min-width: 220px; text-align: right;">
+                    <div style="font-size: 13px; color: #666; margin-bottom: 8px;">{{ paper.status | default('not_started') | replace('_', ' ') | title }}</div>
+                    <div style="display: grid; gap: 8px;">
+                        <button class="btn btn-secondary" style="padding: 8px 12px;" onclick="updatePaperStatus('{{ paper.paper_id }}', 'not_started')">Mark Not Started</button>
+                        <button class="btn btn-primary" style="padding: 8px 12px;" onclick="updatePaperStatus('{{ paper.paper_id }}', 'in_progress')">Mark In Progress</button>
+                        <button class="btn" style="padding: 8px 12px; background: #4caf50; color: white;" onclick="updatePaperStatus('{{ paper.paper_id }}', 'completed')">Mark Completed</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card">
+        <h3>No reading plan yet</h3>
+        <p style="color: #666; margin: 8px 0 0;">Click "Create / Refresh Reading Plan" to generate the first 10 papers for this goal.</p>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function updatePaperStatus(paperId, status) {
+    fetch('/api/paper/update-status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ paper_id: paperId, status: status })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to update status');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Failed to update status');
+    });
+}
+
+function createReadingPlan() {
+    fetch('/api/learning-goals/{{ goal.id }}/create-reading-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to create reading plan');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Failed to create reading plan');
+    });
+}
+</script>
+{% endblock %}

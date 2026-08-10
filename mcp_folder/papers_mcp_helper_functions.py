@@ -384,12 +384,65 @@ class PapersMCPHelperFunctions:
         resolved_by = None
         user_rows = []
 
+        def _resolve_by_name(name_value: str) -> tuple[list[dict], Optional[str]]:
+            # Try exact (case-insensitive) first.
+            exact_rows = run_query(
+                "SELECT id, email, name FROM users WHERE LOWER(name) = LOWER(%s) ORDER BY id LIMIT 3",
+                (name_value,),
+            )
+            if len(exact_rows) == 1:
+                return exact_rows, None
+            if len(exact_rows) > 1:
+                return exact_rows, "Multiple users found for this name. Use user_id or user_email."
+
+            # Fallback to partial matching for user convenience.
+            like_value = f"%{name_value}%"
+            partial_rows = run_query(
+                "SELECT id, email, name FROM users WHERE name ILIKE %s ORDER BY id LIMIT 3",
+                (like_value,),
+            )
+            if len(partial_rows) == 1:
+                return partial_rows, None
+            if len(partial_rows) > 1:
+                return partial_rows, "Multiple users matched this name fragment. Use user_id or user_email."
+
+            return [], None
+
         if user_id:
             resolved_by = "user_id"
             user_rows = run_query(
                 "SELECT id, email, name FROM users WHERE id = %s LIMIT 1",
                 (user_id,),
             )
+
+            # Backward-compatible fallback: if caller passed email/name positionally,
+            # it lands in user_id. Detect and resolve automatically.
+            if not user_rows:
+                if "@" in user_id:
+                    user_rows = run_query(
+                        "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
+                        (user_id,),
+                    )
+                    if user_rows:
+                        resolved_by = "user_email_fallback"
+                else:
+                    name_rows, name_error = _resolve_by_name(user_id)
+                    if name_error:
+                        return {
+                            "status": "error",
+                            "message": name_error,
+                            "matches": [
+                                {
+                                    "id": row.get("id"),
+                                    "email": row.get("email"),
+                                    "name": row.get("name"),
+                                }
+                                for row in name_rows
+                            ],
+                        }
+                    if name_rows:
+                        user_rows = name_rows
+                        resolved_by = "user_name_fallback"
         elif user_email:
             resolved_by = "user_email"
             user_rows = run_query(
@@ -398,15 +451,11 @@ class PapersMCPHelperFunctions:
             )
         else:
             resolved_by = "user_name"
-            # Names are not guaranteed unique, so detect ambiguous matches.
-            user_rows = run_query(
-                "SELECT id, email, name FROM users WHERE LOWER(name) = LOWER(%s) ORDER BY id LIMIT 3",
-                (user_name,),
-            )
-            if len(user_rows) > 1:
+            user_rows, name_error = _resolve_by_name(user_name)
+            if name_error:
                 return {
                     "status": "error",
-                    "message": "Multiple users found for this name. Use user_id or user_email.",
+                    "message": name_error,
                     "matches": [
                         {
                             "id": row.get("id"),

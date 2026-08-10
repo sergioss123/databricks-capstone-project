@@ -1,0 +1,20 @@
+command:
+  - "python"
+  - "papers_mcp_server.py"
+
+resources:
+  - name: requirements
+    source:
+      path: ./requirements.txt
+
+env:
+  - name: LAKEBASE_SECRET_SCOPE
+    value: "database"
+  - name: LAKEBASE_SECRET_KEY
+    value: "lakebase-url"
+  - name: OPENALEXAPI_API_BASE_URL
+    value: "https://api.openalex.org/"
+  - name: OPENALEXAPI_SECRET_SCOPE
+    value: "openalex"
+  - name: OPENALEXAPI_SECRET_KEY
+    value: "api-key"

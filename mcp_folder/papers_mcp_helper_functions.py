@@ -724,11 +724,13 @@ class PapersMCPHelperFunctions:
         user_email: str = "",
         user_name: str = "",
         goal_id: str = "",
+        goal_title: str = "",
         max_papers: int = 10,
         persist: bool = True,
     ) -> dict:
         """Create/refresh a reading plan for a user's learning goal following app.py process."""
         goal_id = (goal_id or "").strip()
+        goal_title = (goal_title or "").strip()
         max_papers = max(1, min(max_papers, 50))
 
         resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
@@ -738,6 +740,12 @@ class PapersMCPHelperFunctions:
         resolved_by = resolution["resolved_by"]
         user_data = resolution["user"]
         resolved_user_id = user_data["id"]
+
+        if not goal_id and not goal_title:
+            return {
+                "status": "error",
+                "message": "Provide goal_id or goal_title to create a reading plan",
+            }
 
         if goal_id:
             goal_rows = run_query(
@@ -754,12 +762,25 @@ class PapersMCPHelperFunctions:
                 """
                 SELECT id, title, description
                 FROM learning_goals
-                WHERE user_id = %s AND status = 'active'
+                WHERE user_id = %s
+                  AND LOWER(title) = LOWER(%s)
                 ORDER BY updated_at DESC, created_at DESC
-                LIMIT 1
+                LIMIT 2
                 """,
-                (resolved_user_id,),
+                (resolved_user_id, goal_title),
             )
+            if len(goal_rows) > 1:
+                return {
+                    "status": "error",
+                    "message": "Multiple learning goals matched this title. Use goal_id.",
+                    "matches": [
+                        {
+                            "id": row.get("id"),
+                            "title": row.get("title"),
+                        }
+                        for row in goal_rows
+                    ],
+                }
 
         if not goal_rows:
             return {

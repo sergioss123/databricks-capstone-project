@@ -34,8 +34,8 @@ If missing, ask one targeted clarification question before calling tools.
 4. If name resolves to multiple users, ask for `user_id` or `user_email`.
 
 ### D) Create Reading Plan
-1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, max_papers, persist)`.
-2. Prefer setting `goal_id` when user specifies a learning goal.
+1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, goal_title, max_papers, persist)`.
+2. Always provide goal context with `goal_id` or `goal_title`.
 3. Return goal, collection, and ordered reading plan entries.
 4. If `persist=true`, confirm that reading order was written to `reading_progress`.
 

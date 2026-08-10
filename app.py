@@ -32,6 +32,7 @@ _w = WorkspaceClient()
 # Initialize OpenAlex client
 openalex_client = OpenAlexClient()
 embedding_generator = None
+_schema_column_cache = {}
 
 
 def get_embedding_generator():
@@ -40,6 +41,28 @@ def get_embedding_generator():
     if embedding_generator is None:
         embedding_generator = EmbeddingGenerator()
     return embedding_generator
+
+
+def table_has_column(table_name: str, column_name: str) -> bool:
+    """Check whether a table has a column, caching the result for the process lifetime."""
+    cache_key = (table_name, column_name)
+    if cache_key in _schema_column_cache:
+        return _schema_column_cache[cache_key]
+
+    rows = lakebase.run_query(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = %s
+              AND column_name = %s
+        ) AS present
+        """,
+        (table_name, column_name)
+    )
+    present = bool(rows and rows[0].get('present'))
+    _schema_column_cache[cache_key] = present
+    return present
 
 # ===========================
 # Database Initialization Functions
@@ -852,18 +875,34 @@ def api_initialize_create_plan():
         
         for order, paper_data in enumerate(sorted_papers, start=1):
             try:
-                # Get full work data
-                work = paper_data.get('work_data', {})
+                # Support either full OpenAlex work payloads or already-ingested paper records.
+                work = paper_data.get('work_data') or paper_data
                 
                 if not work:
                     logger.warning(f"No work data for paper: {paper_data.get('title')}")
                     continue
+
+                openalex_id = work.get('id') or paper_data.get('openalex_id')
                 
-                # Ingest paper using PaperIngestion class
-                paper_id = PaperIngestion.ingest_from_openalex(
-                    openalex_work=work,
-                    upsert=True  # Enable idempotency
-                )
+                # Ingest paper using PaperIngestion class when needed.
+                paper_id = None
+                if openalex_id:
+                    try:
+                        paper_id = PaperIngestion.ingest_from_openalex(
+                            openalex_work=work,
+                            upsert=True  # Enable idempotency
+                        )
+                    except Exception as ingest_error:
+                        logger.error(f"Error ingesting paper {paper_data.get('title')}: {ingest_error}")
+
+                # Fall back to an existing local paper if ingestion did not return an id.
+                if not paper_id and openalex_id:
+                    existing_paper = lakebase.run_query(
+                        "SELECT id FROM papers WHERE openalex_id = %s LIMIT 1",
+                        (openalex_id.replace('https://openalex.org/', ''),)
+                    )
+                    if existing_paper:
+                        paper_id = existing_paper[0]['id']
                 
                 if paper_id:
                     # Create reading progress entry with reading order
@@ -896,9 +935,11 @@ def api_initialize_create_plan():
                     })
                     
                     logger.info(f"Added paper {order}/10 to reading plan: {paper_data.get('title')[:50]}")
+                else:
+                    logger.warning(f"Could not resolve a local paper id for: {paper_data.get('title')}")
                 
             except Exception as e:
-                logger.error(f"Error ingesting paper {paper_data.get('title')}: {e}")
+                logger.exception(f"Error creating reading plan entry for paper {paper_data.get('title')}: {e}")
                 continue
         
         logger.info(f"Created reading plan with {papers_ingested} papers for goal {goal_id}")
@@ -1183,30 +1224,56 @@ def learning_goals():
     )
     
     # For each goal, get the reading plan
+    has_reading_order = table_has_column('reading_progress', 'reading_order')
     for goal in goals:
-        reading_plan = lakebase.run_query(
-            """
-            SELECT 
-                rp.id,
-                rp.paper_id,
-                rp.reading_order,
-                rp.status,
-                rp.progress_percentage,
-                rp.last_read_at,
-                p.title,
-                p.abstract,
-                p.publication_year,
-                p.publication_date,
-                p.doi,
-                p.landing_page_url,
-                p.cited_by_count
-            FROM reading_progress rp
-            JOIN papers p ON rp.paper_id = p.id
-            WHERE rp.user_id = %s AND rp.learning_goal_id = %s
-            ORDER BY rp.reading_order ASC
-            """,
-            (user['id'], goal['id'])
-        )
+        if has_reading_order:
+            reading_plan = lakebase.run_query(
+                """
+                SELECT 
+                    rp.id,
+                    rp.paper_id,
+                    rp.reading_order,
+                    rp.status,
+                    rp.progress_percentage,
+                    rp.last_read_at,
+                    p.title,
+                    p.abstract,
+                    p.publication_year,
+                    p.publication_date,
+                    p.doi,
+                    p.landing_page_url,
+                    p.cited_by_count
+                FROM reading_progress rp
+                JOIN papers p ON rp.paper_id = p.id
+                WHERE rp.user_id = %s AND rp.learning_goal_id = %s
+                ORDER BY rp.reading_order ASC
+                """,
+                (user['id'], goal['id'])
+            )
+        else:
+            reading_plan = lakebase.run_query(
+                """
+                SELECT 
+                    rp.id,
+                    rp.paper_id,
+                    NULL::integer AS reading_order,
+                    rp.status,
+                    rp.progress_percentage,
+                    rp.last_read_at,
+                    p.title,
+                    p.abstract,
+                    p.publication_year,
+                    p.publication_date,
+                    p.doi,
+                    p.landing_page_url,
+                    p.cited_by_count
+                FROM reading_progress rp
+                JOIN papers p ON rp.paper_id = p.id
+                WHERE rp.user_id = %s AND rp.learning_goal_id = %s
+                ORDER BY rp.created_at ASC, rp.id ASC
+                """,
+                (user['id'], goal['id'])
+            )
         goal['reading_plan'] = reading_plan
         
         # Calculate progress
@@ -1333,11 +1400,12 @@ def api_collections_create():
     name = (data.get('name') or '').strip()
     description = (data.get('description') or '').strip()
     paper_ids = data.get('paper_ids') or []
+    openalex_ids = data.get('openalex_ids') or []
 
     if not name:
         return jsonify({'success': False, 'error': 'Collection name is required'}), 400
 
-    if not paper_ids:
+    if not paper_ids and not openalex_ids:
         return jsonify({'success': False, 'error': 'Select at least one paper'}), 400
 
     try:
@@ -1384,6 +1452,33 @@ def api_collections_create():
                         """,
                         (collection_id, paper_id)
                     )
+
+                for openalex_id in openalex_ids:
+                    normalized_openalex_id = openalex_id.replace('https://openalex.org/', '')
+                    work = openalex_client.get_work(normalized_openalex_id)
+                    if not work:
+                        logger.warning(f"Could not fetch OpenAlex work for {normalized_openalex_id}")
+                        continue
+
+                    paper_id = PaperIngestion.ingest_from_openalex(work, upsert=True)
+                    if not paper_id:
+                        existing_paper = lakebase.run_query(
+                            "SELECT id FROM papers WHERE openalex_id = %s LIMIT 1",
+                            (normalized_openalex_id,)
+                        )
+                        paper_id = existing_paper[0]['id'] if existing_paper else None
+
+                    if paper_id:
+                        cursor.execute(
+                            """
+                            INSERT INTO collection_papers (collection_id, paper_id)
+                            VALUES (%s, %s)
+                            ON CONFLICT (collection_id, paper_id) DO NOTHING
+                            """,
+                            (collection_id, paper_id)
+                        )
+                    else:
+                        logger.warning(f"Could not ingest or resolve paper for {normalized_openalex_id}")
 
                 conn.commit()
 
@@ -1440,20 +1535,37 @@ def paper_detail(paper_id):
     
     # Get other papers in the same reading plan
     if paper.get('learning_goal_id'):
-        reading_plan = lakebase.run_query(
-            """
-            SELECT 
-                rp.paper_id,
-                rp.reading_order,
-                rp.status,
-                p.title
-            FROM reading_progress rp
-            JOIN papers p ON rp.paper_id = p.id
-            WHERE rp.learning_goal_id = %s AND rp.user_id = %s
-            ORDER BY rp.reading_order ASC
-            """,
-            (paper['learning_goal_id'], user['id'])
-        )
+        has_reading_order = table_has_column('reading_progress', 'reading_order')
+        if has_reading_order:
+            reading_plan = lakebase.run_query(
+                """
+                SELECT 
+                    rp.paper_id,
+                    rp.reading_order,
+                    rp.status,
+                    p.title
+                FROM reading_progress rp
+                JOIN papers p ON rp.paper_id = p.id
+                WHERE rp.learning_goal_id = %s AND rp.user_id = %s
+                ORDER BY rp.reading_order ASC
+                """,
+                (paper['learning_goal_id'], user['id'])
+            )
+        else:
+            reading_plan = lakebase.run_query(
+                """
+                SELECT 
+                    rp.paper_id,
+                    NULL::integer AS reading_order,
+                    rp.status,
+                    p.title
+                FROM reading_progress rp
+                JOIN papers p ON rp.paper_id = p.id
+                WHERE rp.learning_goal_id = %s AND rp.user_id = %s
+                ORDER BY rp.created_at ASC, rp.id ASC
+                """,
+                (paper['learning_goal_id'], user['id'])
+            )
         paper['reading_plan'] = reading_plan
         
         # Find current position

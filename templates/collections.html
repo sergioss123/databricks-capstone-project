@@ -33,7 +33,6 @@
     <div class="card" style="margin-bottom: 24px;">
         <h2 style="margin-bottom: 12px;">Search Results</h2>
         {% if search_results %}
-        {% if search_is_semantic %}
         <form id="createCollectionForm">
             <div class="form-group">
                 <label for="collectionName">Collection name</label>
@@ -43,12 +42,23 @@
                 <label for="collectionDescription">Collection description</label>
                 <input id="collectionDescription" class="form-control" placeholder="Short note about this collection">
             </div>
+            <p style="color: #666; margin-bottom: 16px;">
+                {% if search_is_semantic %}
+                Selected items are already in your local database.
+                {% else %}
+                Selected OpenAlex results will be ingested into your local database before being added to the collection.
+                {% endif %}
+            </p>
 
             <div style="display: grid; gap: 12px; margin-bottom: 16px;">
                 {% for paper in search_results %}
                 <label style="display: block; padding: 14px; border: 1px solid #e8e8e8; border-radius: 8px; background: #fff;">
                     <div style="display: flex; gap: 12px; align-items: start;">
-                        <input type="checkbox" name="paper_ids" value="{{ paper.id or paper.openalex_id }}" checked style="margin-top: 4px;">
+                        <input type="checkbox"
+                               name="{% if search_is_semantic %}paper_ids{% else %}openalex_ids{% endif %}"
+                               value="{{ paper.id or paper.openalex_id }}"
+                               checked
+                               style="margin-top: 4px;">
                         <div>
                             <div style="font-weight: 600; margin-bottom: 4px;">{{ paper.title }}</div>
                             <div style="color: #777; font-size: 13px;">
@@ -67,26 +77,6 @@
 
             <button class="btn btn-primary" type="button" onclick="createCollection()">Create collection from selected papers</button>
         </form>
-        {% else %}
-        <div style="display: grid; gap: 12px;">
-            {% for paper in search_results %}
-            <div style="padding: 14px; border: 1px solid #e8e8e8; border-radius: 8px; background: #fff;">
-                <div style="font-weight: 600; margin-bottom: 4px;">{{ paper.title }}</div>
-                <div style="color: #777; font-size: 13px;">
-                    {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
-                    {% if paper.cited_by_count is not none %} · {{ paper.cited_by_count }} citations{% endif %}
-                </div>
-                {% if paper.abstract %}
-                <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.abstract[:220] }}{% if paper.abstract|length > 220 %}...{% endif %}</p>
-                {% endif %}
-                {% if paper.landing_page_url %}
-                <a href="{{ paper.landing_page_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; margin-top: 8px;">Open paper</a>
-                {% endif %}
-            </div>
-            {% endfor %}
-        </div>
-        <p style="color: #999; margin-top: 12px;">OpenAlex results are browse-only until they are ingested into your local database.</p>
-        {% endif %}
         {% else %}
         <p style="color: #999;">No papers found for this query.</p>
         {% endif %}
@@ -121,13 +111,14 @@ function createCollection() {
     const name = document.getElementById('collectionName').value.trim();
     const description = document.getElementById('collectionDescription').value.trim();
     const paperIds = [...form.querySelectorAll('input[name="paper_ids"]:checked')].map(el => el.value);
+    const openalexIds = [...form.querySelectorAll('input[name="openalex_ids"]:checked')].map(el => el.value);
 
     if (!name) {
         alert('Collection name is required');
         return;
     }
 
-    if (!paperIds.length) {
+    if (!paperIds.length && !openalexIds.length) {
         alert('Select at least one paper');
         return;
     }
@@ -135,7 +126,7 @@ function createCollection() {
     fetch('/api/collections/create', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ name, description, paper_ids: paperIds })
+        body: JSON.stringify({ name, description, paper_ids: paperIds, openalex_ids: openalexIds })
     })
     .then(resp => resp.json())
     .then(data => {

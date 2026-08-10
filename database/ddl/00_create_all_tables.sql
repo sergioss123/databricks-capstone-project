@@ -177,6 +177,8 @@ CREATE TABLE IF NOT EXISTS reading_progress (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     user_id TEXT NOT NULL,
     paper_id TEXT NOT NULL,
+    learning_goal_id TEXT,
+    reading_order INTEGER,
     status TEXT DEFAULT 'not_started' CHECK (status IN ('not_started', 'in_progress', 'completed')),
     progress_percentage INTEGER DEFAULT 0 CHECK (progress_percentage >= 0 AND progress_percentage <= 100),
     last_read_at TIMESTAMPTZ,
@@ -185,11 +187,14 @@ CREATE TABLE IF NOT EXISTS reading_progress (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(user_id, paper_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+    FOREIGN KEY (learning_goal_id) REFERENCES learning_goals(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_reading_progress_user_id ON reading_progress (user_id);
 CREATE INDEX IF NOT EXISTS idx_reading_progress_paper_id ON reading_progress (paper_id);
 CREATE INDEX IF NOT EXISTS idx_reading_progress_status ON reading_progress (status);
+CREATE INDEX IF NOT EXISTS idx_reading_progress_learning_goal_id ON reading_progress (learning_goal_id);
+CREATE INDEX IF NOT EXISTS idx_reading_progress_reading_order ON reading_progress (reading_order);
 
 -- Notes table (depends on users and papers)
 CREATE TABLE IF NOT EXISTS notes (

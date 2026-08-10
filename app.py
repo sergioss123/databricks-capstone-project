@@ -339,6 +339,9 @@ def ensure_reading_progress_table():
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_status ON reading_progress (status)"
     )
     lakebase.run_write(
+        "ALTER TABLE reading_progress ADD COLUMN IF NOT EXISTS reading_order INTEGER"
+    )
+    lakebase.run_write(
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_learning_goal_id ON reading_progress (learning_goal_id)"
     )
     lakebase.run_write(

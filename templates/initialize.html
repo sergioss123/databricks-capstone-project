@@ -76,7 +76,7 @@
                                               height: 100%; border-radius: 10px; width: 0%; 
                                               transition: width 0.3s;"></div>
             </div>
-            <p id="progressText" style="color: #666; font-size: 14px;">Processing papers...</p>
+            <p id="progressText" style="color: #666; font-size: 14px;">Building your reading plan...</p>
         </div>
 
         <button class="btn btn-primary" onclick="createReadingPlan()" id="createPlanBtn">
@@ -118,6 +118,17 @@ const urlParams = new URLSearchParams(window.location.search);
 const userId = urlParams.get('user_id');
 let foundPapers = [];
 let goalId = null;
+
+function setCreatePlanButtonState(disabled, label) {
+    const button = document.getElementById('createPlanBtn');
+    if (!button) {
+        return;
+    }
+    button.disabled = disabled;
+    if (label) {
+        button.textContent = label;
+    }
+}
 
 function searchPapers() {
     const goalTitle = document.getElementById('goalTitle').value.trim();
@@ -164,6 +175,54 @@ function searchPapers() {
     });
 }
 
+function createReadingPlan() {
+    if (!userId || !goalId || !foundPapers.length) {
+        alert('Search for papers first before creating a reading plan.');
+        return;
+    }
+
+    setCreatePlanButtonState(true, 'Creating Reading Plan...');
+    document.getElementById('ingestionProgress').classList.remove('hidden');
+    document.getElementById('progressBar').style.width = '35%';
+    document.getElementById('progressText').textContent = 'Selecting the top papers and building the plan...';
+
+    fetch('/api/initialize/create-plan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            user_id: userId,
+            goal_id: goalId,
+            papers: foundPapers
+        })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('finalPaperCount').textContent =
+                `${data.papers_ingested} papers added to the reading plan`;
+            document.getElementById('finalChunkCount').textContent =
+                `${data.reading_plan.length} reading steps created`;
+
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressText').textContent = 'Reading plan created successfully.';
+
+            document.getElementById('step1').classList.add('hidden');
+            document.getElementById('step2').classList.add('hidden');
+            document.getElementById('step3').classList.remove('hidden');
+        } else {
+            alert(data.error || 'Reading plan creation failed');
+            setCreatePlanButtonState(false, '📖 Create Reading Plan (Top 10 Papers)');
+            document.getElementById('ingestionProgress').classList.add('hidden');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Reading plan creation failed');
+        setCreatePlanButtonState(false, '📖 Create Reading Plan (Top 10 Papers)');
+        document.getElementById('ingestionProgress').classList.add('hidden');
+    });
+}
+
 function displayPapers(papers) {
     const container = document.getElementById('papersPreview');
     const countDisplay = document.getElementById('paperCountDisplay');
@@ -186,40 +245,6 @@ function displayPapers(papers) {
             ` : ''}
         </div>
     `).join('');
-}
-
-function ingestPapers() {
-    document.getElementById('ingestBtn').disabled = true;
-    document.getElementById('ingestionProgress').classList.remove('hidden');
-
-    fetch('/api/initialize/ingest', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            user_id: userId,
-            papers: foundPapers
-        })
-    })
-    .then(resp => resp.json())
-    .then(data => {
-        if (data.success) {
-            document.getElementById('finalPaperCount').textContent = 
-                `${data.papers_ingested} papers ingested`;
-            document.getElementById('finalChunkCount').textContent = 
-                `${data.chunks_created} chunks embedded`;
-            
-            document.getElementById('step2').classList.add('hidden');
-            document.getElementById('step3').classList.remove('hidden');
-        } else {
-            alert(data.error || 'Ingestion failed');
-            document.getElementById('ingestBtn').disabled = false;
-        }
-    })
-    .catch(err => {
-        console.error(err);
-        alert('Ingestion failed');
-        document.getElementById('ingestBtn').disabled = false;
-    });
 }
 </script>
 {% endblock %}

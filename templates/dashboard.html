@@ -3,112 +3,34 @@
 {% block title %}Dashboard - AI Research Assistant{% endblock %}
 
 {% block content %}
-<h2 style="margin-bottom: 30px;">📊 Your Research Dashboard</h2>
+<div style="max-width: 1100px; margin: 0 auto;">
+    <div style="margin-bottom: 24px;">
+        <h1 style="margin-bottom: 8px;">📊 Dashboard</h1>
+        <p style="color: #666;">A quick KPI view of your research workspace.</p>
+    </div>
 
-<!-- Quick Stats -->
-<div class="grid" style="margin-bottom: 40px;">
-    <div class="card" style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-        <h3 style="margin-bottom: 10px;">{{ stats.total_papers }}</h3>
-        <p>Papers in Library</p>
-    </div>
-    <div class="card" style="text-align: center; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
-        <h3 style="margin-bottom: 10px;">{{ stats.learning_goals }}</h3>
-        <p>Learning Goals</p>
-    </div>
-    <div class="card" style="text-align: center; background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white;">
-        <h3 style="margin-bottom: 10px;">{{ stats.reading_progress }}%</h3>
-        <p>Average Progress</p>
-    </div>
-    <div class="card" style="text-align: center; background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white;">
-        <h3 style="margin-bottom: 10px;">{{ stats.collections }}</h3>
-        <p>Collections</p>
-    </div>
-</div>
-
-<!-- Recent Activity -->
-<div class="card">
-    <h3 style="margin-bottom: 20px;">🕒 Recent Activity</h3>
-    {% if recent_activity %}
-    <div>
-        {% for activity in recent_activity %}
-        <div style="padding: 15px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <strong>{{ activity.action }}</strong>
-                <p style="color: #666; font-size: 13px; margin: 5px 0 0 0;">{{ activity.description }}</p>
-            </div>
-            <span style="color: #999; font-size: 12px;">{{ activity.timestamp }}</span>
+    <div class="grid" style="margin-bottom: 24px;">
+        <div class="card" style="text-align: center;">
+            <div style="font-size: 44px; font-weight: 700; color: #667eea;">{{ stats.total_papers }}</div>
+            <div style="color: #666; margin-top: 8px;">Total papers</div>
         </div>
-        {% endfor %}
-    </div>
-    {% else %}
-    <p style="color: #999; text-align: center; padding: 20px;">
-        No recent activity. Start exploring papers!
-    </p>
-    {% endif %}
-</div>
-
-<!-- Learning Goals -->
-<div class="card" style="margin-top: 30px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h3>🎯 Active Learning Goals</h3>
-        <a href="{{ url_for('learning_goals') }}" class="btn btn-secondary">
-            View All Goals
-        </a>
-    </div>
-    {% if learning_goals %}
-    <div class="grid">
-        {% for goal in learning_goals[:3] %}
-        <div class="card" style="background: #f9f9f9;">
-            <h4 style="color: #667eea; margin-bottom: 10px;">{{ goal.title }}</h4>
-            <p style="color: #666; font-size: 13px; margin-bottom: 15px;">
-                {{ goal.description[:100] }}{% if goal.description|length > 100 %}...{% endif %}
-            </p>
-            <div style="background: #e0e0e0; border-radius: 10px; height: 8px; margin-bottom: 5px;">
-                <div style="background: #667eea; height: 100%; border-radius: 10px; width: {{ goal.progress }}%;"></div>
-            </div>
-            <small style="color: #999;">{{ goal.progress }}% complete</small>
+        <div class="card" style="text-align: center;">
+            <div style="font-size: 44px; font-weight: 700; color: #667eea;">{{ stats.learning_goals }}</div>
+            <div style="color: #666; margin-top: 8px;">Learning goals</div>
         </div>
-        {% endfor %}
-    </div>
-    {% else %}
-    <p style="color: #999; text-align: center; padding: 20px;">
-        No active learning goals. <a href="{{ url_for('learning_goals') }}">Create one</a> to get started!
-    </p>
-    {% endif %}
-</div>
-
-<!-- Recommended Papers -->
-<div class="card" style="margin-top: 30px;">
-    <h3 style="margin-bottom: 20px;">⭐ Recommended for You</h3>
-    {% if recommended_papers %}
-    <div>
-        {% for paper in recommended_papers[:5] %}
-        <div style="border-left: 3px solid #667eea; padding: 15px; margin-bottom: 15px; background: #f9f9f9; border-radius: 4px;">
-            <h4 style="margin-bottom: 5px;">
-                <a href="{{ url_for('paper_detail', paper_id=paper.id) }}" style="color: #333; text-decoration: none;">
-                    {{ paper.title }}
-                </a>
-            </h4>
-            <p style="font-size: 13px; color: #666; margin: 5px 0;">
-                {{ paper.publication_year }} | 📝 {{ paper.cited_by_count }} citations |
-                {% if paper.is_oa %}🔓 Open Access{% else %}🔒 Restricted{% endif %}
-            </p>
-            {% if paper.abstract %}
-            <p style="font-size: 13px; color: #666; margin-top: 10px;">
-                {{ paper.abstract[:200] }}...
-            </p>
-            {% endif %}
-            <button class="btn btn-primary" style="margin-top: 10px; padding: 8px 16px; font-size: 12px;"
-                    onclick="window.location.href='{{ url_for('paper_detail', paper_id=paper.id) }}'">
-                Read More
-            </button>
+        <div class="card" style="text-align: center;">
+            <div style="font-size: 44px; font-weight: 700; color: #667eea;">{{ stats.collections }}</div>
+            <div style="color: #666; margin-top: 8px;">Collections</div>
         </div>
-        {% endfor %}
+        <div class="card" style="text-align: center;">
+            <div style="font-size: 44px; font-weight: 700; color: #667eea;">{{ stats.reading_progress }}%</div>
+            <div style="color: #666; margin-top: 8px;">Average progress</div>
+        </div>
     </div>
-    {% else %}
-    <p style="color: #999; text-align: center; padding: 20px;">
-        No recommendations yet. Add more papers to get personalized suggestions!
-    </p>
-    {% endif %}
+
+    <div class="card">
+        <h3 style="margin-bottom: 10px;">Workspace summary</h3>
+        <p style="color: #666; margin: 0;">Use the Learning Goals page to review reading plans, the Papers page to open paper links in your collections, and Collections to search or assemble new paper sets.</p>
+    </div>
 </div>
 {% endblock %}

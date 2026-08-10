@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Papers - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 1100px; margin: 0 auto;">
+    <div style="margin-bottom: 24px; display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap;">
+        <div>
+            <h1 style="margin-bottom: 8px;">📚 Papers</h1>
+            <p style="color: #666;">Paper links grouped by collection. Use Collections to build or search new sets.</p>
+        </div>
+        <a href="{{ url_for('collections') }}" class="btn btn-primary">Manage Collections</a>
+    </div>
+
+    {% if not collections %}
+    <div class="card">
+        <h3>No collections yet</h3>
+        <p style="color: #666; margin: 12px 0 0;">Create a collection first, then its papers will appear here as links.</p>
+    </div>
+    {% endif %}
+
+    {% for collection in collections %}
+    <div class="card" style="margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+            <div>
+                <h2 style="margin-bottom: 4px;">{{ collection.name }}</h2>
+                <p style="color: #666;">{{ collection.paper_count }} papers{% if collection.description %} · {{ collection.description }}{% endif %}</p>
+            </div>
+        </div>
+
+        {% if collection.papers %}
+        <div style="display: grid; gap: 12px;">
+            {% for paper in collection.papers %}
+            <div style="padding: 14px 16px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa;">
+                <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
+                    {{ paper.title }}
+                </a>
+                {% if paper.doi %}
+                <div style="font-size: 12px; color: #777; margin-top: 6px;">DOI: {{ paper.doi }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color: #999;">No papers in this collection yet.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}Collections - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto;">
+    <div style="margin-bottom: 24px;">
+        <h1 style="margin-bottom: 8px;">📁 Collections</h1>
+        <p style="color: #666;">Search papers by OpenAlex or semantic similarity, then build collections from the results.</p>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px;">
+        <form method="get" action="{{ url_for('collections') }}" style="display: grid; gap: 14px; grid-template-columns: 1fr auto auto; align-items: end;">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label for="query">Search query</label>
+                <input id="query" name="query" class="form-control" value="{{ search_query }}" placeholder="machine learning healthcare diagnosis">
+            </div>
+            <div class="form-group" style="margin-bottom: 0; min-width: 220px;">
+                <label for="mode">Search mode</label>
+                <select id="mode" name="mode" class="form-control">
+                    <option value="api" {% if search_mode == 'api' %}selected{% endif %}>OpenAlex API</option>
+                    <option value="semantic" {% if search_mode == 'semantic' %}selected{% endif %}>Semantic search</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-primary" type="submit">Search</button>
+                <a class="btn btn-secondary" href="{{ url_for('collections') }}">Reset</a>
+            </div>
+        </form>
+    </div>
+
+    {% if search_query %}
+    <div class="card" style="margin-bottom: 24px;">
+        <h2 style="margin-bottom: 12px;">Search Results</h2>
+        {% if search_results %}
+        {% if search_is_semantic %}
+        <form id="createCollectionForm">
+            <div class="form-group">
+                <label for="collectionName">Collection name</label>
+                <input id="collectionName" class="form-control" placeholder="e.g., Deep Learning Papers">
+            </div>
+            <div class="form-group">
+                <label for="collectionDescription">Collection description</label>
+                <input id="collectionDescription" class="form-control" placeholder="Short note about this collection">
+            </div>
+
+            <div style="display: grid; gap: 12px; margin-bottom: 16px;">
+                {% for paper in search_results %}
+                <label style="display: block; padding: 14px; border: 1px solid #e8e8e8; border-radius: 8px; background: #fff;">
+                    <div style="display: flex; gap: 12px; align-items: start;">
+                        <input type="checkbox" name="paper_ids" value="{{ paper.id or paper.openalex_id }}" checked style="margin-top: 4px;">
+                        <div>
+                            <div style="font-weight: 600; margin-bottom: 4px;">{{ paper.title }}</div>
+                            <div style="color: #777; font-size: 13px;">
+                                {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
+                                {% if paper.cited_by_count is not none %} · {{ paper.cited_by_count }} citations{% endif %}
+                                {% if paper.relevance_score is not none %} · relevance {{ '%.3f'|format(paper.relevance_score) }}{% endif %}
+                            </div>
+                            {% if paper.abstract %}
+                            <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.abstract[:220] }}{% if paper.abstract|length > 220 %}...{% endif %}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </label>
+                {% endfor %}
+            </div>
+
+            <button class="btn btn-primary" type="button" onclick="createCollection()">Create collection from selected papers</button>
+        </form>
+        {% else %}
+        <div style="display: grid; gap: 12px;">
+            {% for paper in search_results %}
+            <div style="padding: 14px; border: 1px solid #e8e8e8; border-radius: 8px; background: #fff;">
+                <div style="font-weight: 600; margin-bottom: 4px;">{{ paper.title }}</div>
+                <div style="color: #777; font-size: 13px;">
+                    {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
+                    {% if paper.cited_by_count is not none %} · {{ paper.cited_by_count }} citations{% endif %}
+                </div>
+                {% if paper.abstract %}
+                <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.abstract[:220] }}{% if paper.abstract|length > 220 %}...{% endif %}</p>
+                {% endif %}
+                {% if paper.landing_page_url %}
+                <a href="{{ paper.landing_page_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; margin-top: 8px;">Open paper</a>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <p style="color: #999; margin-top: 12px;">OpenAlex results are browse-only until they are ingested into your local database.</p>
+        {% endif %}
+        {% else %}
+        <p style="color: #999;">No papers found for this query.</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <h2 style="margin-bottom: 12px;">Your Collections</h2>
+        {% if collections %}
+        <div style="display: grid; gap: 16px;">
+            {% for collection in collections %}
+            <div style="border: 1px solid #ececec; border-radius: 8px; padding: 16px; background: #fafafa;">
+                <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                    <div>
+                        <h3 style="margin-bottom: 4px;">{{ collection.name }}</h3>
+                        <p style="color: #666;">{{ collection.paper_count }} papers{% if collection.description %} · {{ collection.description }}{% endif %}</p>
+                    </div>
+                    <a href="{{ url_for('papers') }}" class="btn btn-secondary">Open papers view</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color: #999;">No collections yet. Search for papers above to create one.</p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function createCollection() {
+    const form = document.getElementById('createCollectionForm');
+    const name = document.getElementById('collectionName').value.trim();
+    const description = document.getElementById('collectionDescription').value.trim();
+    const paperIds = [...form.querySelectorAll('input[name="paper_ids"]:checked')].map(el => el.value);
+
+    if (!name) {
+        alert('Collection name is required');
+        return;
+    }
+
+    if (!paperIds.length) {
+        alert('Select at least one paper');
+        return;
+    }
+
+    fetch('/api/collections/create', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, description, paper_ids: paperIds })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            window.location.href = '{{ url_for('collections') }}';
+        } else {
+            alert(data.error || 'Failed to create collection');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Failed to create collection');
+    });
+}
+</script>
+{% endblock %}

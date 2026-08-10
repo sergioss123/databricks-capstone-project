@@ -20,7 +20,7 @@ from databricks.sdk import WorkspaceClient
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 
 import lakebase
-from agent_helper_functions import OpenAlexClient, PaperIngestion
+from agent_helper_functions import EmbeddingGenerator, OpenAlexClient, PaperIngestion
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("capston-project-app")
@@ -31,6 +31,15 @@ _w = WorkspaceClient()
 
 # Initialize OpenAlex client
 openalex_client = OpenAlexClient()
+embedding_generator = None
+
+
+def get_embedding_generator():
+    """Lazily initialize the local embedding model used for semantic search."""
+    global embedding_generator
+    if embedding_generator is None:
+        embedding_generator = EmbeddingGenerator()
+    return embedding_generator
 
 # ===========================
 # Database Initialization Functions
@@ -1091,52 +1100,64 @@ def dashboard():
         )[0]['count']
     }
     
-    # Get learning goals
-    learning_goals = lakebase.run_query(
-        """
-        SELECT id, title, description, status
-        FROM learning_goals
-        WHERE user_id = %s AND status = 'active'
-        ORDER BY created_at DESC
-        LIMIT 3
-        """,
-        (user['id'],)
-    )
-    
-    # Add progress to each goal (dummy data for now)
-    for goal in learning_goals:
-        goal['progress'] = 50  # TODO: Calculate actual progress
-    
-    # Get recommended papers (top cited papers for now)
-    recommended_papers = lakebase.run_query(
-        """
-        SELECT id, title, abstract, publication_year, cited_by_count, is_oa
-        FROM papers
-        ORDER BY cited_by_count DESC
-        LIMIT 5
-        """
-    )
-    
     return render_template(
         "dashboard.html",
         active_tab='dashboard',
         current_user=user,
         stats=stats,
-        learning_goals=learning_goals,
-        recommended_papers=recommended_papers,
         recent_activity=[]  # TODO: Implement activity tracking
     )
 
 @app.route("/papers")
 @require_login
 def papers():
-    """Papers library page."""
+    """Paper index page grouped by the user's collections."""
     user = get_current_user()
     if not user:
         session.clear()
         return redirect(url_for('login'))
-    # TODO: Implement papers page
-    return "Papers page coming soon!"
+
+    collections = lakebase.run_query(
+        """
+        SELECT
+            c.id,
+            c.name,
+            c.description,
+            c.created_at,
+            COUNT(cp.paper_id) AS paper_count
+        FROM collections c
+        LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+        WHERE c.user_id = %s
+        GROUP BY c.id, c.name, c.description, c.created_at
+        ORDER BY c.created_at DESC
+        """,
+        (user['id'],)
+    )
+
+    for collection in collections:
+        collection['papers'] = lakebase.run_query(
+            """
+            SELECT
+                p.id,
+                p.title,
+                p.landing_page_url,
+                p.doi,
+                COALESCE(cp.notes, '') AS notes,
+                cp.added_at
+            FROM collection_papers cp
+            JOIN papers p ON p.id = cp.paper_id
+            WHERE cp.collection_id = %s
+            ORDER BY cp.added_at ASC, p.title ASC
+            """,
+            (collection['id'],)
+        )
+
+    return render_template(
+        "papers.html",
+        active_tab='papers',
+        current_user=user,
+        collections=collections
+    )
 
 @app.route("/learning-goals")
 @require_login
@@ -1192,18 +1213,181 @@ def learning_goals():
         else:
             goal['progress'] = 0
     
-    return render_template("learning_goals.html", goals=goals, user=user)
+    return render_template(
+        "learning_goals.html",
+        active_tab='goals',
+        current_user=user,
+        goals=goals,
+        user=user
+    )
 
 @app.route("/collections")
 @require_login
 def collections():
-    """Collections page."""
+    """Collections page with API or semantic paper search."""
     user = get_current_user()
     if not user:
         session.clear()
         return redirect(url_for('login'))
-    # TODO: Implement collections page
-    return "Collections page coming soon!"
+
+    search_query = request.args.get('query', '').strip()
+    search_mode = request.args.get('mode', 'api')
+    search_results = []
+
+    if search_query:
+        if search_mode == 'semantic':
+            query_embedding = get_embedding_generator().generate_embedding(search_query)
+            if query_embedding:
+                search_results = lakebase.run_query(
+                    """
+                    SELECT
+                        id,
+                        title,
+                        abstract,
+                        publication_year,
+                        cited_by_count,
+                        landing_page_url,
+                        doi,
+                        1 - (abstract_embedding <=> %s::vector) AS relevance_score
+                    FROM papers
+                    WHERE abstract_embedding IS NOT NULL
+                    ORDER BY abstract_embedding <=> %s::vector ASC
+                    LIMIT 25
+                    """,
+                    (query_embedding, query_embedding)
+                )
+        else:
+            response = openalex_client.search_works(query=search_query, per_page=25)
+            if response and response.get('results'):
+                for work in response['results']:
+                    abstract_text = ''
+                    if work.get('abstract_inverted_index'):
+                        abstract_text = openalex_client.reconstruct_abstract(work['abstract_inverted_index'])
+                    search_results.append({
+                        'openalex_id': work.get('id'),
+                        'title': work.get('title') or work.get('display_name'),
+                        'abstract': abstract_text,
+                        'publication_year': work.get('publication_year'),
+                        'cited_by_count': work.get('cited_by_count', 0),
+                        'landing_page_url': work.get('primary_location', {}).get('landing_page_url'),
+                        'doi': work.get('doi'),
+                        'relevance_score': None,
+                    })
+
+    collections = lakebase.run_query(
+        """
+        SELECT
+            c.id,
+            c.name,
+            c.description,
+            c.created_at,
+            COUNT(cp.paper_id) AS paper_count
+        FROM collections c
+        LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+        WHERE c.user_id = %s
+        GROUP BY c.id, c.name, c.description, c.created_at
+        ORDER BY c.created_at DESC
+        """,
+        (user['id'],)
+    )
+
+    for collection in collections:
+        collection['papers'] = lakebase.run_query(
+            """
+            SELECT
+                p.id,
+                p.title,
+                p.landing_page_url,
+                p.doi,
+                cp.notes,
+                cp.added_at
+            FROM collection_papers cp
+            JOIN papers p ON p.id = cp.paper_id
+            WHERE cp.collection_id = %s
+            ORDER BY cp.added_at ASC, p.title ASC
+            """,
+            (collection['id'],)
+        )
+
+    return render_template(
+        "collections.html",
+        active_tab='collections',
+        current_user=user,
+        collections=collections,
+        search_results=search_results,
+        search_query=search_query,
+        search_mode=search_mode,
+        search_is_semantic=(search_mode == 'semantic')
+    )
+
+
+@app.route("/api/collections/create", methods=['POST'])
+@require_login
+def api_collections_create():
+    """Create a collection from selected papers, idempotently."""
+    user = get_current_user()
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    description = (data.get('description') or '').strip()
+    paper_ids = data.get('paper_ids') or []
+
+    if not name:
+        return jsonify({'success': False, 'error': 'Collection name is required'}), 400
+
+    if not paper_ids:
+        return jsonify({'success': False, 'error': 'Select at least one paper'}), 400
+
+    try:
+        with lakebase.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id FROM collections
+                    WHERE user_id = %s AND name = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (user['id'], name)
+                )
+                existing = cursor.fetchone()
+
+                if existing:
+                    collection_id = existing['id']
+                    cursor.execute(
+                        """
+                        UPDATE collections
+                        SET description = COALESCE(NULLIF(%s, ''), description), updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (description, collection_id)
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO collections (user_id, name, description)
+                        VALUES (%s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user['id'], name, description)
+                    )
+                    collection_id = cursor.fetchone()['id']
+
+                for paper_id in paper_ids:
+                    cursor.execute(
+                        """
+                        INSERT INTO collection_papers (collection_id, paper_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (collection_id, paper_id) DO NOTHING
+                        """,
+                        (collection_id, paper_id)
+                    )
+
+                conn.commit()
+
+        return jsonify({'success': True, 'collection_id': collection_id})
+    except Exception as e:
+        logger.error(f"Error creating collection: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route("/paper/<paper_id>")
 @require_login

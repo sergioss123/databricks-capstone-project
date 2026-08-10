@@ -21,7 +21,7 @@
         </div>
 
         <div style="margin-bottom: 12px;">
-            <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
+            <a href="{{ paper.external_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
                 Open paper link
             </a>
         </div>

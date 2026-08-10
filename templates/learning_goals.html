@@ -6,7 +6,7 @@
 <div style="max-width: 1200px; margin: 0 auto;">
     <div style="margin-bottom: 24px;">
         <h1 style="margin-bottom: 8px;">🎯 Learning Goals</h1>
-        <p style="color: #666;">Each goal shows the collections tied to it.</p>
+        <p style="color: #666;">Each goal shows its reading plan progress.</p>
     </div>
 
     {% if not goals %}
@@ -51,37 +51,6 @@
                 <div style="color: #666; font-size: 13px;">Collections linked to this goal</div>
             </div>
         </div>
-
-        <div style="font-size: 12px; color: #667eea; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;">Collections List</div>
-
-        {% if goal.collections %}
-        <div style="display: grid; gap: 12px;">
-            {% for collection in goal.collections %}
-            <div style="border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
-                <div style="display: flex; justify-content: space-between; gap: 12px; align-items: start; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 0;">
-                        <div style="font-size: 12px; color: #888; margin-bottom: 6px;">{{ collection.paper_count }} papers</div>
-                        <div style="font-size: 16px; font-weight: 600; color: #223;">{{ collection.name }}</div>
-                        {% if collection.description %}
-                        <div style="color: #777; font-size: 13px; margin-top: 6px;">{{ collection.description }}</div>
-                        {% endif %}
-                        <div style="margin-top: 10px; background: #e8e8e8; border-radius: 999px; height: 10px; overflow: hidden; max-width: 420px;">
-                            <div style="width: {{ collection.progress }}%; height: 100%; background: linear-gradient(135deg, #667eea, #764ba2);"></div>
-                        </div>
-                        <div style="color: #666; font-size: 13px; margin-top: 6px;">
-                            {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
-                        </div>
-                    </div>
-                    <div style="display: flex; align-items: center;">
-                        <a href="{{ url_for('collections') }}" class="btn btn-secondary" style="padding: 7px 10px; font-size: 12px;">Open Papers</a>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <p style="color: #999; margin-top: 8px;">No collections linked to this goal yet.</p>
-        {% endif %}
 
     </div>
     {% endfor %}

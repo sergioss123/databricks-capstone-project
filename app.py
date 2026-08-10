@@ -77,6 +77,33 @@ def summarize_abstract(abstract: Optional[str], max_length: int = 220) -> str:
     return text[:max_length].rsplit(' ', 1)[0] + '...'
 
 
+def build_external_paper_url(paper: dict) -> Optional[str]:
+    """Build the best available external paper URL from stored metadata.
+
+    Fallback order:
+    1) DOI URL (canonical external id for works)
+    2) OpenAlex work URL
+    3) Publisher/repository landing page URL
+    """
+    if not paper:
+        return None
+
+    doi = (paper.get('doi') or '').strip()
+    if doi:
+        if doi.startswith('http://') or doi.startswith('https://'):
+            return doi
+        return f"https://doi.org/{doi}"
+
+    openalex_id = (paper.get('openalex_id') or '').strip()
+    if openalex_id:
+        if openalex_id.startswith('http://') or openalex_id.startswith('https://'):
+            return openalex_id
+        return f"https://openalex.org/{openalex_id}"
+
+    landing_page_url = (paper.get('landing_page_url') or '').strip()
+    return landing_page_url or None
+
+
 def create_goal_reading_plan(user_id: str, goal_id: str, papers: list, max_papers: int = 10) -> dict:
     """Create or refresh a reading plan for a learning goal using provided papers."""
     if not user_id or not goal_id:
@@ -2348,6 +2375,7 @@ def paper_workspace(paper_id):
         """
         SELECT
             p.id,
+            p.openalex_id,
             p.title,
             p.abstract,
             p.doi,
@@ -2370,6 +2398,7 @@ def paper_workspace(paper_id):
 
     paper = paper_rows[0]
     paper['summary'] = summarize_abstract(paper.get('abstract'), max_length=320)
+    paper['external_url'] = build_external_paper_url(paper)
 
     notes_rows = lakebase.run_query(
         """

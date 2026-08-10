@@ -34,10 +34,11 @@ If missing, ask one targeted clarification question before calling tools.
 4. If name resolves to multiple users, ask for `user_id` or `user_email`.
 
 ### D) Create Reading Plan
-1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, goal_title, max_papers, persist)`.
+1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, goal_title, papers, max_papers, persist)`.
 2. Always provide goal context with `goal_id` or `goal_title`.
-3. Return goal, collection, and ordered reading plan entries.
-4. If `persist=true`, confirm that reading order was written to `reading_progress`.
+3. When available, pass `papers` from the search step to replicate the initialize button flow (top oldest papers).
+4. Return goal, collection, and ordered reading plan entries.
+5. If `persist=true`, confirm that reading order was written to `reading_progress`.
 
 ### E) Raw OpenAlex
 1. Call `request_openalex_api(endpoint, params)`.

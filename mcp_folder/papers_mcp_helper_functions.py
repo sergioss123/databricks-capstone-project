@@ -725,12 +725,14 @@ class PapersMCPHelperFunctions:
         user_name: str = "",
         goal_id: str = "",
         goal_title: str = "",
+        papers: Optional[list[dict]] = None,
         max_papers: int = 10,
         persist: bool = True,
     ) -> dict:
         """Create/refresh a reading plan for a user's learning goal following app.py process."""
         goal_id = (goal_id or "").strip()
         goal_title = (goal_title or "").strip()
+        papers = papers or []
         max_papers = max(1, min(max_papers, 50))
 
         resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
@@ -839,32 +841,37 @@ class PapersMCPHelperFunctions:
         goal_title = goal.get("title") or "Learning Goal"
         goal_description = goal.get("description")
 
-        like_query = f"%{goal_title}%"
-        local_results = run_query(
-            """
-            SELECT
-                id AS paper_id,
-                openalex_id,
-                title,
-                abstract,
-                publication_year,
-                cited_by_count,
-                doi,
-                landing_page_url
-            FROM papers
-            WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
-            ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
-            LIMIT 20
-            """,
-            (like_query, like_query),
-        )
+        if papers:
+            # Mirror the initialize button flow: use client-provided found papers.
+            source = "provided"
+            candidate_papers: list[dict] = papers
+        else:
+            like_query = f"%{goal_title}%"
+            local_results = run_query(
+                """
+                SELECT
+                    id AS paper_id,
+                    openalex_id,
+                    title,
+                    abstract,
+                    publication_year,
+                    cited_by_count,
+                    doi,
+                    landing_page_url
+                FROM papers
+                WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
+                ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
+                LIMIT 20
+                """,
+                (like_query, like_query),
+            )
 
-        source = "local"
-        candidate_papers: list[dict] = local_results
-        if not candidate_papers:
-            response = self.openalex_client.search_works(query=goal_title, per_page=20)
-            candidate_papers = response.get("results", []) if response else []
-            source = "openalex"
+            source = "local"
+            candidate_papers = local_results
+            if not candidate_papers:
+                response = self.openalex_client.search_works(query=goal_title, per_page=20)
+                candidate_papers = response.get("results", []) if response else []
+                source = "openalex"
 
         if not candidate_papers:
             return {
@@ -907,7 +914,7 @@ class PapersMCPHelperFunctions:
                 if existing:
                     paper_id = existing[0]["id"]
 
-            if not paper_id and source == "openalex":
+            if not paper_id and normalized_openalex_id:
                 paper_id = self._upsert_paper_from_openalex_work(work)
 
             if not paper_id:
@@ -938,6 +945,7 @@ class PapersMCPHelperFunctions:
                     (resolved_user_id, paper_id, selected_goal_id, order),
                 )
 
+            paper_source = paper_data.get("source") or source
             papers_ingested += 1
             plan.append(
                 {
@@ -947,7 +955,7 @@ class PapersMCPHelperFunctions:
                     "order": order,
                     "publication_year": paper_data.get("publication_year") or work.get("publication_year"),
                     "status": "not_started",
-                    "source": source,
+                    "source": paper_source,
                 }
             )
 
@@ -974,6 +982,7 @@ class PapersMCPHelperFunctions:
                 "name": goal_title,
             },
             "max_papers": max_papers,
+            "input_papers_count": len(candidate_papers),
             "persisted": persist,
             "papers_ingested": papers_ingested,
             "count": len(plan),

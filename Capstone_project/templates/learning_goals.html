@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Learning Goals - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto;">
+    <div style="margin-bottom: 30px;">
+        <h1 style="color: #667eea; margin-bottom: 10px;">📚 Your Learning Goals</h1>
+        <p style="color: #666;">Track your progress through your personalized reading plans</p>
+    </div>
+
+    {% if not goals %}
+    <div class="card">
+        <h3>No Learning Goals Yet</h3>
+        <p style="color: #666; margin: 20px 0;">Start by creating your first learning goal and reading plan.</p>
+        <a href="/initialize?user_id={{ user['id'] }}" class="btn btn-primary">Create Your First Goal</a>
+    </div>
+    {% else %}
+        {% for goal in goals %}
+        <div class="card" style="margin-bottom: 30px;">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px;">
+                <div>
+                    <h2 style="color: #333; margin-bottom: 10px;">{{ goal['title'] }}</h2>
+                    {% if goal['description'] %}
+                    <p style="color: #666; margin-bottom: 15px;">{{ goal['description'] }}</p>
+                    {% endif %}
+                    <span class="badge" style="background: {% if goal['status'] == 'active' %}#4caf50{% else %}#999{% endif %}; 
+                                                         color: white; padding: 5px 15px; border-radius: 20px; font-size: 12px;">
+                        {{ goal['status'] | upper }}
+                    </span>
+                </div>
+                <div style="text-align: right;">
+                    <div style="font-size: 32px; font-weight: bold; color: #667eea;">
+                        {{ goal['progress'] }}%
+                    </div>
+                    <div style="font-size: 12px; color: #999;">
+                        Complete
+                    </div>
+                </div>
+            </div>
+
+            {% if goal['reading_plan'] %}
+            <div style="margin-top: 20px;">
+                <h3 style="color: #667eea; margin-bottom: 15px; font-size: 18px;">
+                    📖 Reading Plan ({{ goal['reading_plan']|length }} papers)
+                </h3>
+                
+                <div style="background: #f5f5f5; border-radius: 10px; padding: 20px;">
+                    {% for paper in goal['reading_plan'] %}
+                    <div style="display: flex; align-items: center; padding: 15px; 
+                                background: white; border-radius: 8px; margin-bottom: 10px;
+                                border-left: 4px solid {% if paper['status'] == 'completed' %}#4caf50{% elif paper['status'] == 'in_progress' %}#ff9800{% else %}#ddd{% endif %};">
+                        
+                        <div style="width: 40px; text-align: center; margin-right: 15px;">
+                            <div style="font-size: 20px; font-weight: bold; color: #667eea;">
+                                {{ paper['reading_order'] }}
+                            </div>
+                        </div>
+                        
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                {% if paper['status'] == 'completed' %}
+                                <span style="font-size: 20px;">✅</span>
+                                {% elif paper['status'] == 'in_progress' %}
+                                <span style="font-size: 20px;">📖</span>
+                                {% else %}
+                                <span style="font-size: 20px;">⭕</span>
+                                {% endif %}
+                                
+                                <div>
+                                    <a href="/paper/{{ paper['paper_id'] }}" 
+                                       style="color: #333; text-decoration: none; font-weight: 500;">
+                                        {{ paper['title'] }}
+                                    </a>
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                                        {% if paper['publication_year'] %}{{ paper['publication_year'] }} • {% endif %}
+                                        {% if paper['cited_by_count'] %}{{ paper['cited_by_count'] }} citations • {% endif %}
+                                        {% if paper['last_read_at'] %}Last read: {{ paper['last_read_at'].strftime('%b %d, %Y') }}{% else %}Not started{% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <a href="/paper/{{ paper['paper_id'] }}" class="btn btn-primary" 
+                               style="padding: 8px 20px; font-size: 14px;">
+                                {% if paper['status'] == 'completed' %}
+                                    Review
+                                {% elif paper['status'] == 'in_progress' %}
+                                    Continue
+                                {% else %}
+                                    Start Reading
+                                {% endif %}
+                            </a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% else %}
+            <div class="alert alert-info" style="margin-top: 20px;">
+                No reading plan created yet for this goal.
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+{% endblock %}

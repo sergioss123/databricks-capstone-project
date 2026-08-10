@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}{{ paper['title'] }} - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 1000px; margin: 0 auto;">
+    <!-- Paper Header -->
+    <div class="card" style="margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
+            <div style="flex: 1;">
+                <h1 style="color: #333; margin-bottom: 15px; font-size: 24px;">{{ paper['title'] }}</h1>
+                
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 14px; color: #666; margin-bottom: 15px;">
+                    {% if paper['publication_year'] %}
+                    <span>📅 {{ paper['publication_year'] }}</span>
+                    {% endif %}
+                    {% if paper['cited_by_count'] %}
+                    <span>📊 {{ paper['cited_by_count'] }} citations</span>
+                    {% endif %}
+                    {% if paper['venue_display_name'] %}
+                    <span>📘 {{ paper['venue_display_name'] }}</span>
+                    {% endif %}
+                    {% if paper['doi'] %}
+                    <span>🔗 <a href="https://doi.org/{{ paper['doi'] }}" target="_blank">DOI</a></span>
+                    {% endif %}
+                </div>
+
+                {% if paper['goal_title'] %}
+                <div style="margin-top: 10px;">
+                    <span style="background: #f0f0f0; padding: 5px 15px; border-radius: 20px; font-size: 12px;">
+                        🎯 {{ paper['goal_title'] }}
+                        {% if paper['reading_order'] %} • Paper {{ paper['reading_order'] }}{% endif %}
+                    </span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div style="text-align: right;">
+                <div style="font-size: 14px; color: #999; margin-bottom: 10px;">
+                    Status: <strong style="color: {% if paper['status'] == 'completed' %}#4caf50{% elif paper['status'] == 'in_progress' %}#ff9800{% else %}#999{% endif %};">
+                        {{ paper['status'] | default('Not Started') | title }}
+                    </strong>
+                </div>
+                {% if paper['prev_paper'] %}
+                <a href="/paper/{{ paper['prev_paper']['paper_id'] }}" class="btn" style="margin-bottom: 5px;">
+                    ⬅️ Previous
+                </a>
+                {% endif %}
+                {% if paper['next_paper'] %}
+                <a href="/paper/{{ paper['next_paper']['paper_id'] }}" class="btn">
+                    Next ➡️
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Paper Content -->
+    <div class="card" style="margin-bottom: 20px;">
+        <h2 style="color: #667eea; margin-bottom: 20px; font-size: 20px;">📄 Abstract</h2>
+        {% if paper['abstract'] %}
+        <p style="line-height: 1.8; color: #333; text-align: justify;">
+            {{ paper['abstract'] }}
+        </p>
+        {% else %}
+        <p style="color: #999; font-style: italic;">No abstract available.</p>
+        {% endif %}
+
+        {% if paper['chunks'] and paper['chunks']|length > 0 %}
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+        
+        <h2 style="color: #667eea; margin-bottom: 20px; font-size: 20px;">📖 Full Paper Content</h2>
+        
+        <div id="paperContent" style="max-height: 600px; overflow-y: auto; 
+                                      padding: 20px; background: #f9f9f9; 
+                                      border-radius: 8px; line-height: 1.8;">
+            {% for chunk in paper['chunks'] %}
+            <div style="margin-bottom: 25px;">
+                {% if chunk['section_title'] %}
+                <h3 style="color: #667eea; margin-bottom: 10px; font-size: 18px;">
+                    {{ chunk['section_title'] }}
+                </h3>
+                {% endif %}
+                <p style="color: #333; text-align: justify;">
+                    {{ chunk['chunk_text'] }}
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Reading Actions -->
+    <div class="card" style="background: #f0f7ff; border-left: 4px solid #667eea;">
+        <h3 style="color: #667eea; margin-bottom: 20px;">✅ Mark Your Progress</h3>
+        
+        <div style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <button class="btn btn-primary" onclick="updateStatus('in_progress')" id="btn-in-progress">
+                📖 Mark as In Progress
+            </button>
+            <button class="btn" style="background: #4caf50; color: white;" 
+                    onclick="updateStatus('completed')" id="btn-completed">
+                ✅ Mark as Completed
+            </button>
+            <button class="btn" style="background: #999; color: white;" 
+                    onclick="updateStatus('not_started')" id="btn-not-started">
+                ⭕ Mark as Not Started
+            </button>
+        </div>
+
+        <div id="statusMessage" style="margin-top: 15px; padding: 10px; border-radius: 5px; display: none;"></div>
+    </div>
+
+    <!-- Navigation -->
+    {% if paper['reading_plan'] %}
+    <div class="card">
+        <h3 style="color: #667eea; margin-bottom: 15px;">📚 Reading Plan</h3>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            {% for plan_paper in paper['reading_plan'] %}
+            <a href="/paper/{{ plan_paper['paper_id'] }}" 
+               style="padding: 8px 15px; border-radius: 5px; text-decoration: none; font-size: 14px;
+                      {% if plan_paper['paper_id'] == paper['id'] %}
+                      background: #667eea; color: white; font-weight: bold;
+                      {% else %}
+                      background: #f0f0f0; color: #333;
+                      {% endif %}">
+                {{ plan_paper['reading_order'] }}. {% if plan_paper['status'] == 'completed' %}✅{% endif %}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function updateStatus(status) {
+    const paperId = "{{ paper['id'] }}";
+    const messageDiv = document.getElementById('statusMessage');
+    
+    // Disable all buttons during request
+    document.getElementById('btn-in-progress').disabled = true;
+    document.getElementById('btn-completed').disabled = true;
+    document.getElementById('btn-not-started').disabled = true;
+    
+    fetch('/api/paper/update-status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            paper_id: paperId,
+            status: status
+        })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            messageDiv.style.display = 'block';
+            messageDiv.style.background = '#d4edda';
+            messageDiv.style.color = '#155724';
+            messageDiv.textContent = '✅ Status updated successfully!';
+            
+            // Reload after 1 second to show updated status
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            messageDiv.style.display = 'block';
+            messageDiv.style.background = '#f8d7da';
+            messageDiv.style.color = '#721c24';
+            messageDiv.textContent = '❌ Failed to update status: ' + (data.error || 'Unknown error');
+            
+            // Re-enable buttons
+            document.getElementById('btn-in-progress').disabled = false;
+            document.getElementById('btn-completed').disabled = false;
+            document.getElementById('btn-not-started').disabled = false;
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        messageDiv.style.display = 'block';
+        messageDiv.style.background = '#f8d7da';
+        messageDiv.style.color = '#721c24';
+        messageDiv.textContent = '❌ Failed to update status';
+        
+        // Re-enable buttons
+        document.getElementById('btn-in-progress').disabled = false;
+        document.getElementById('btn-completed').disabled = false;
+        document.getElementById('btn-not-started').disabled = false;
+    });
+}
+</script>
+{% endblock %}

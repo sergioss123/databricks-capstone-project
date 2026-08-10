@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Initialize Account - AI Research Assistant{% endblock %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto;">
+    <!-- Step 1: Topic Selection -->
+    <div id="step1" class="card">
+        <h2 style="color: #667eea; margin-bottom: 10px;">
+            🎯 Step 1: What would you like to learn?
+        </h2>
+        <p style="color: #666; margin-bottom: 30px;">
+            Tell us your research interests and we'll help you discover relevant papers
+        </p>
+
+        <div class="form-group">
+            <label>Learning Goal Title *</label>
+            <input type="text" id="goalTitle" class="form-control" 
+                   placeholder="e.g., Machine Learning in Healthcare">
+        </div>
+
+        <div class="form-group">
+            <label>Description (Optional)</label>
+            <textarea id="goalDescription" class="form-control" rows="3"
+                      placeholder="Describe what you want to learn about this topic..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Search Query for Papers *</label>
+            <input type="text" id="searchQuery" class="form-control" 
+                   placeholder="e.g., machine learning healthcare diagnosis">
+            <small style="color: #999; display: block; margin-top: 5px;">
+                This will be used to find relevant papers on OpenAlex
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label>Number of Papers to Find</label>
+            <select id="paperCount" class="form-control">
+                <option value="10">10 papers</option>
+                <option value="25" selected>25 papers</option>
+                <option value="50">50 papers</option>
+                <option value="100">100 papers</option>
+            </select>
+        </div>
+
+        <button class="btn btn-primary" onclick="searchPapers()">
+            🔍 Search for Papers
+        </button>
+
+        <div id="searchSpinner" class="spinner hidden"></div>
+    </div>
+
+    <!-- Step 2: Papers Found -->
+    <div id="step2" class="card hidden">
+        <h2 style="color: #667eea; margin-bottom: 10px;">
+            📚 Step 2: Review Found Papers
+        </h2>
+        <p style="color: #666; margin-bottom: 20px;">
+            We found <strong id="paperCountDisplay">0</strong> papers matching your topic
+        </p>
+
+        <div class="alert alert-info">
+            <strong>ℹ️ Note:</strong> Papers are being processed and embedded into the database. 
+            This enables semantic search and intelligent recommendations.
+        </div>
+
+        <div id="papersPreview" style="max-height: 400px; overflow-y: auto; margin-bottom: 20px;">
+            <!-- Papers will be displayed here -->
+        </div>
+
+        <div id="ingestionProgress" class="hidden">
+            <p><strong>Ingestion Progress:</strong></p>
+            <div style="background: #e0e0e0; border-radius: 10px; height: 20px; margin-bottom: 10px;">
+                <div id="progressBar" style="background: linear-gradient(135deg, #667eea, #764ba2); 
+                                              height: 100%; border-radius: 10px; width: 0%; 
+                                              transition: width 0.3s;"></div>
+            </div>
+            <p id="progressText" style="color: #666; font-size: 14px;">Processing papers...</p>
+        </div>
+
+        <button class="btn btn-primary" onclick="createReadingPlan()" id="createPlanBtn">
+            📖 Create Reading Plan (Top 10 Papers)
+        </button>
+    </div>
+
+    <!-- Step 3: Complete -->
+    <div id="step3" class="card hidden">
+        <h2 style="color: #4caf50; margin-bottom: 10px;">
+            ✔️ Setup Complete!
+        </h2>
+        <p style="color: #666; margin-bottom: 20px;">
+            Your account has been initialized with your learning goal and relevant papers.
+        </p>
+
+        <div class="alert alert-success">
+            <strong>🎉 Success!</strong> Your reading plan is ready with:
+            <ul style="margin: 10px 0 0 20px;">
+                <li id="finalPaperCount">0 papers ingested</li>
+                <li id="finalChunkCount">0 chunks embedded</li>
+                <li>Papers ordered from oldest to newest</li>
+            </ul>
+        </div>
+
+        <button class="btn btn-primary" onclick="window.location.href='/learning-goals'" 
+                style="width: 100%; margin-bottom: 10px;">
+            📚 Start Reading Your Plan
+        </button>
+        <button class="btn btn-secondary" onclick="window.location.href='/dashboard'" 
+                style="width: 100%;">
+            🚀 Go to Dashboard
+        </button>
+    </div>
+</div>
+
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+const userId = urlParams.get('user_id');
+let foundPapers = [];
+let goalId = null;
+
+function searchPapers() {
+    const goalTitle = document.getElementById('goalTitle').value.trim();
+    const goalDescription = document.getElementById('goalDescription').value.trim();
+    const searchQuery = document.getElementById('searchQuery').value.trim();
+    const paperCount = parseInt(document.getElementById('paperCount').value);
+
+    if (!goalTitle || !searchQuery) {
+        alert('Please fill in the required fields');
+        return;
+    }
+
+    showSpinner('searchSpinner');
+
+    // Create learning goal and search papers
+    fetch('/api/initialize/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            user_id: userId,
+            goal_title: goalTitle,
+            goal_description: goalDescription,
+            search_query: searchQuery,
+            paper_count: paperCount
+        })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        hideSpinner('searchSpinner');
+        if (data.success) {
+            foundPapers = data.papers;
+            goalId = data.goal_id;  // Store goal_id for reading plan
+            displayPapers(data.papers);
+            document.getElementById('step1').classList.add('hidden');
+            document.getElementById('step2').classList.remove('hidden');
+        } else {
+            alert(data.error || 'Search failed');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        hideSpinner('searchSpinner');
+        alert('Search failed');
+    });
+}
+
+function displayPapers(papers) {
+    const container = document.getElementById('papersPreview');
+    const countDisplay = document.getElementById('paperCountDisplay');
+    
+    countDisplay.textContent = papers.length;
+    
+    container.innerHTML = papers.map(paper => `
+        <div style="border-left: 3px solid #667eea; padding: 10px; margin-bottom: 15px; 
+                    background: #f9f9f9; border-radius: 4px;">
+            <h4 style="margin-bottom: 5px; color: #333;">${paper.title || paper.display_name}</h4>
+            <p style="font-size: 13px; color: #666; margin: 5px 0;">
+                ${paper.publication_year || 'N/A'} | 
+                📝 ${paper.cited_by_count || 0} citations | 
+                ${paper.is_oa ? '🔓 Open Access' : '🔒 Restricted'}
+            </p>
+            ${paper.abstract_text ? `
+                <p style="font-size: 13px; color: #666; margin-top: 10px;">
+                    ${paper.abstract_text.substring(0, 200)}...
+                </p>
+            ` : ''}
+        </div>
+    `).join('');
+}
+
+function ingestPapers() {
+    document.getElementById('ingestBtn').disabled = true;
+    document.getElementById('ingestionProgress').classList.remove('hidden');
+
+    fetch('/api/initialize/ingest', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            user_id: userId,
+            papers: foundPapers
+        })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            document.getElementById('finalPaperCount').textContent = 
+                `${data.papers_ingested} papers ingested`;
+            document.getElementById('finalChunkCount').textContent = 
+                `${data.chunks_created} chunks embedded`;
+            
+            document.getElementById('step2').classList.add('hidden');
+            document.getElementById('step3').classList.remove('hidden');
+        } else {
+            alert(data.error || 'Ingestion failed');
+            document.getElementById('ingestBtn').disabled = false;
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Ingestion failed');
+        document.getElementById('ingestBtn').disabled = false;
+    });
+}
+</script>
+{% endblock %}

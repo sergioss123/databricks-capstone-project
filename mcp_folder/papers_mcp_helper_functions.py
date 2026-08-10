@@ -187,6 +187,137 @@ class PapersMCPHelperFunctions:
     def __init__(self, per_page: int = 25):
         self.openalex_client = OpenAlexClient(per_page=per_page)
 
+    def _resolve_name_matches(self, name_value: str) -> tuple[list[dict], Optional[str]]:
+        """Resolve a user by name with exact-first, partial-second matching."""
+        exact_rows = run_query(
+            "SELECT id, email, name FROM users WHERE LOWER(name) = LOWER(%s) ORDER BY id LIMIT 3",
+            (name_value,),
+        )
+        if len(exact_rows) == 1:
+            return exact_rows, None
+        if len(exact_rows) > 1:
+            return exact_rows, "Multiple users found for this name. Use user_id or user_email."
+
+        like_value = f"%{name_value}%"
+        partial_rows = run_query(
+            "SELECT id, email, name FROM users WHERE name ILIKE %s ORDER BY id LIMIT 3",
+            (like_value,),
+        )
+        if len(partial_rows) == 1:
+            return partial_rows, None
+        if len(partial_rows) > 1:
+            return partial_rows, "Multiple users matched this name fragment. Use user_id or user_email."
+
+        return [], None
+
+    def _resolve_user(
+        self,
+        user_id: str = "",
+        user_email: str = "",
+        user_name: str = "",
+    ) -> dict:
+        """Resolve one user by id/email/name with backward-compatible fallback behavior."""
+        user_id = (user_id or "").strip()
+        user_email = (user_email or "").strip()
+        user_name = (user_name or "").strip()
+
+        if not user_id and not user_email and not user_name:
+            return {
+                "ok": False,
+                "result": {
+                    "status": "error",
+                    "message": "Provide one identifier: user_id, user_email, or user_name",
+                },
+            }
+
+        resolved_by = None
+        user_rows: list[dict] = []
+
+        if user_id:
+            resolved_by = "user_id"
+            user_rows = run_query(
+                "SELECT id, email, name FROM users WHERE id = %s LIMIT 1",
+                (user_id,),
+            )
+
+            if not user_rows:
+                if "@" in user_id:
+                    user_rows = run_query(
+                        "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
+                        (user_id,),
+                    )
+                    if user_rows:
+                        resolved_by = "user_email_fallback"
+                else:
+                    name_rows, name_error = self._resolve_name_matches(user_id)
+                    if name_error:
+                        return {
+                            "ok": False,
+                            "result": {
+                                "status": "error",
+                                "message": name_error,
+                                "matches": [
+                                    {
+                                        "id": row.get("id"),
+                                        "email": row.get("email"),
+                                        "name": row.get("name"),
+                                    }
+                                    for row in name_rows
+                                ],
+                            },
+                        }
+                    if name_rows:
+                        user_rows = name_rows
+                        resolved_by = "user_name_fallback"
+        elif user_email:
+            resolved_by = "user_email"
+            user_rows = run_query(
+                "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
+                (user_email,),
+            )
+        else:
+            resolved_by = "user_name"
+            user_rows, name_error = self._resolve_name_matches(user_name)
+            if name_error:
+                return {
+                    "ok": False,
+                    "result": {
+                        "status": "error",
+                        "message": name_error,
+                        "matches": [
+                            {
+                                "id": row.get("id"),
+                                "email": row.get("email"),
+                                "name": row.get("name"),
+                            }
+                            for row in user_rows
+                        ],
+                    },
+                }
+
+        if not user_rows:
+            if user_id:
+                detail = user_id
+            elif user_email:
+                detail = user_email
+            else:
+                detail = user_name
+            return {
+                "ok": False,
+                "result": {"status": "error", "message": f"User not found: {detail}"},
+            }
+
+        user_row = user_rows[0]
+        return {
+            "ok": True,
+            "resolved_by": resolved_by,
+            "user": {
+                "id": str(user_row.get("id")),
+                "email": user_row.get("email"),
+                "name": user_row.get("name"),
+            },
+        }
+
     def ensure_openalex_request_log_table_exists(self) -> bool:
         try:
             run_write(
@@ -369,114 +500,16 @@ class PapersMCPHelperFunctions:
         limit: int = 20,
     ) -> dict:
         """Find papers associated with a user resolved by id, email, or name."""
-        user_id = (user_id or "").strip()
-        user_email = (user_email or "").strip()
-        user_name = (user_name or "").strip()
         query = (query or "").strip()
         limit = max(1, min(limit, 100))
 
-        if not user_id and not user_email and not user_name:
-            return {
-                "status": "error",
-                "message": "Provide one identifier: user_id, user_email, or user_name",
-            }
+        resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
+        if not resolution.get("ok"):
+            return resolution["result"]
 
-        resolved_by = None
-        user_rows = []
-
-        def _resolve_by_name(name_value: str) -> tuple[list[dict], Optional[str]]:
-            # Try exact (case-insensitive) first.
-            exact_rows = run_query(
-                "SELECT id, email, name FROM users WHERE LOWER(name) = LOWER(%s) ORDER BY id LIMIT 3",
-                (name_value,),
-            )
-            if len(exact_rows) == 1:
-                return exact_rows, None
-            if len(exact_rows) > 1:
-                return exact_rows, "Multiple users found for this name. Use user_id or user_email."
-
-            # Fallback to partial matching for user convenience.
-            like_value = f"%{name_value}%"
-            partial_rows = run_query(
-                "SELECT id, email, name FROM users WHERE name ILIKE %s ORDER BY id LIMIT 3",
-                (like_value,),
-            )
-            if len(partial_rows) == 1:
-                return partial_rows, None
-            if len(partial_rows) > 1:
-                return partial_rows, "Multiple users matched this name fragment. Use user_id or user_email."
-
-            return [], None
-
-        if user_id:
-            resolved_by = "user_id"
-            user_rows = run_query(
-                "SELECT id, email, name FROM users WHERE id = %s LIMIT 1",
-                (user_id,),
-            )
-
-            # Backward-compatible fallback: if caller passed email/name positionally,
-            # it lands in user_id. Detect and resolve automatically.
-            if not user_rows:
-                if "@" in user_id:
-                    user_rows = run_query(
-                        "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
-                        (user_id,),
-                    )
-                    if user_rows:
-                        resolved_by = "user_email_fallback"
-                else:
-                    name_rows, name_error = _resolve_by_name(user_id)
-                    if name_error:
-                        return {
-                            "status": "error",
-                            "message": name_error,
-                            "matches": [
-                                {
-                                    "id": row.get("id"),
-                                    "email": row.get("email"),
-                                    "name": row.get("name"),
-                                }
-                                for row in name_rows
-                            ],
-                        }
-                    if name_rows:
-                        user_rows = name_rows
-                        resolved_by = "user_name_fallback"
-        elif user_email:
-            resolved_by = "user_email"
-            user_rows = run_query(
-                "SELECT id, email, name FROM users WHERE LOWER(email) = LOWER(%s) LIMIT 1",
-                (user_email,),
-            )
-        else:
-            resolved_by = "user_name"
-            user_rows, name_error = _resolve_by_name(user_name)
-            if name_error:
-                return {
-                    "status": "error",
-                    "message": name_error,
-                    "matches": [
-                        {
-                            "id": row.get("id"),
-                            "email": row.get("email"),
-                            "name": row.get("name"),
-                        }
-                        for row in user_rows
-                    ],
-                }
-
-        if not user_rows:
-            if user_id:
-                detail = user_id
-            elif user_email:
-                detail = user_email
-            else:
-                detail = user_name
-            return {"status": "error", "message": f"User not found: {detail}"}
-
-        user_row = user_rows[0]
-        resolved_user_id = str(user_row.get("id"))
+        resolved_by = resolution["resolved_by"]
+        user_data = resolution["user"]
+        resolved_user_id = user_data["id"]
 
         params = [resolved_user_id, resolved_user_id]
         query_clause = ""
@@ -536,12 +569,205 @@ class PapersMCPHelperFunctions:
         return {
             "status": "success",
             "resolved_by": resolved_by,
-            "user": {
-                "id": user_row.get("id"),
-                "email": user_row.get("email"),
-                "name": user_row.get("name"),
-            },
+            "user": user_data,
             "query": query,
             "count": len(formatted),
             "papers": formatted,
+        }
+
+    def create_user_reading_plan(
+        self,
+        user_id: str = "",
+        user_email: str = "",
+        user_name: str = "",
+        query: str = "",
+        max_papers: int = 10,
+        include_completed: bool = False,
+        persist: bool = True,
+    ) -> dict:
+        """Create a prioritized reading plan for a user and optionally persist reading_order."""
+        query = (query or "").strip()
+        max_papers = max(1, min(max_papers, 50))
+
+        resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
+        if not resolution.get("ok"):
+            return resolution["result"]
+
+        resolved_by = resolution["resolved_by"]
+        user_data = resolution["user"]
+        resolved_user_id = user_data["id"]
+
+        goal_rows = run_query(
+            """
+            SELECT id, title
+            FROM learning_goals
+            WHERE user_id = %s AND status = 'active'
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (resolved_user_id,),
+        )
+        active_goal_id = goal_rows[0].get("id") if goal_rows else None
+        active_goal_title = goal_rows[0].get("title") if goal_rows else None
+
+        params: list[Any] = [resolved_user_id, resolved_user_id]
+        query_clause = ""
+        if query:
+            query_clause = " AND (p.title ILIKE %s OR COALESCE(p.abstract, '') ILIKE %s)"
+            like_query = f"%{query}%"
+            params.extend([like_query, like_query])
+
+        status_clause = ""
+        if not include_completed:
+            status_clause = " AND COALESCE(rp.status, 'not_started') <> 'completed'"
+
+        params.append(max_papers * 4)
+
+        candidate_rows = run_query(
+            f"""
+            SELECT
+                p.id AS paper_id,
+                p.openalex_id,
+                p.title,
+                p.abstract,
+                p.publication_year,
+                p.cited_by_count,
+                p.doi,
+                p.landing_page_url,
+                COALESCE(rp.status, 'not_started') AS reading_status,
+                COALESCE(rp.progress_percentage, 0) AS progress_percentage,
+                rp.learning_goal_id,
+                BOOL_OR(c.id IS NOT NULL) AS in_collection,
+                BOOL_OR(rp.user_id IS NOT NULL) AS in_reading_plan,
+                MAX(COALESCE(rp.updated_at, cp.added_at, p.updated_at, p.created_at)) AS last_interaction
+            FROM papers p
+            LEFT JOIN collection_papers cp ON cp.paper_id = p.id
+            LEFT JOIN collections c ON c.id = cp.collection_id AND c.user_id = %s
+            LEFT JOIN reading_progress rp ON rp.paper_id = p.id AND rp.user_id = %s
+            WHERE (c.id IS NOT NULL OR rp.user_id IS NOT NULL)
+            {status_clause}
+            {query_clause}
+            GROUP BY p.id, p.openalex_id, p.title, p.abstract, p.publication_year, p.cited_by_count, p.doi, p.landing_page_url, rp.status, rp.progress_percentage, rp.learning_goal_id
+            ORDER BY last_interaction DESC NULLS LAST, p.cited_by_count DESC NULLS LAST
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+
+        if not candidate_rows:
+            return {
+                "status": "success",
+                "resolved_by": resolved_by,
+                "user": user_data,
+                "query": query,
+                "max_papers": max_papers,
+                "persisted": False,
+                "count": 0,
+                "reading_plan": [],
+                "message": "No matching papers found for this user.",
+            }
+
+        current_year = time.gmtime().tm_year
+
+        def _score(row: dict) -> float:
+            status = row.get("reading_status") or "not_started"
+            progress = int(row.get("progress_percentage") or 0)
+            cited = int(row.get("cited_by_count") or 0)
+            pub_year = row.get("publication_year")
+
+            status_weight = {
+                "not_started": 120.0,
+                "in_progress": 90.0,
+                "completed": 10.0,
+            }.get(status, 60.0)
+
+            progress_penalty = progress * 0.35
+            citation_bonus = min(cited, 800) * 0.04
+            recency_bonus = 0.0
+            if isinstance(pub_year, int):
+                recency_bonus = max(0, 8 - max(0, current_year - pub_year))
+
+            collection_bonus = 8.0 if row.get("in_collection") else 0.0
+            existing_plan_bonus = 4.0 if row.get("in_reading_plan") else 0.0
+
+            return status_weight - progress_penalty + citation_bonus + recency_bonus + collection_bonus + existing_plan_bonus
+
+        scored = sorted(candidate_rows, key=_score, reverse=True)[:max_papers]
+
+        plan = []
+        for idx, row in enumerate(scored, start=1):
+            status = row.get("reading_status") or "not_started"
+            reason_parts = []
+            if status == "not_started":
+                reason_parts.append("new paper")
+            elif status == "in_progress":
+                reason_parts.append("continue in-progress")
+            elif status == "completed":
+                reason_parts.append("review completed")
+            if row.get("in_collection"):
+                reason_parts.append("in collection")
+            if int(row.get("cited_by_count") or 0) >= 100:
+                reason_parts.append("highly cited")
+
+            plan.append(
+                {
+                    "order": idx,
+                    "paper_id": row.get("paper_id"),
+                    "openalex_id": row.get("openalex_id"),
+                    "title": row.get("title"),
+                    "publication_year": row.get("publication_year"),
+                    "cited_by_count": row.get("cited_by_count", 0),
+                    "doi": row.get("doi"),
+                    "landing_page_url": row.get("landing_page_url"),
+                    "reading_status": status,
+                    "progress_percentage": row.get("progress_percentage", 0),
+                    "reason": ", ".join(reason_parts) if reason_parts else "recommended",
+                    "summary": summarize_abstract(row.get("abstract") or "", max_length=240),
+                }
+            )
+
+        persisted_count = 0
+        if persist:
+            for item in plan:
+                run_write(
+                    """
+                    INSERT INTO reading_progress (
+                        user_id,
+                        paper_id,
+                        learning_goal_id,
+                        reading_order,
+                        status,
+                        progress_percentage,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, 'not_started', 0, NOW())
+                    ON CONFLICT (user_id, paper_id)
+                    DO UPDATE SET
+                        learning_goal_id = COALESCE(EXCLUDED.learning_goal_id, reading_progress.learning_goal_id),
+                        reading_order = EXCLUDED.reading_order,
+                        updated_at = NOW()
+                    """,
+                    (
+                        resolved_user_id,
+                        item["paper_id"],
+                        active_goal_id,
+                        item["order"],
+                    ),
+                )
+                persisted_count += 1
+
+        return {
+            "status": "success",
+            "resolved_by": resolved_by,
+            "user": user_data,
+            "query": query,
+            "max_papers": max_papers,
+            "persisted": persist,
+            "persisted_count": persisted_count,
+            "active_learning_goal": {
+                "id": active_goal_id,
+                "title": active_goal_title,
+            },
+            "count": len(plan),
+            "reading_plan": plan,
         }

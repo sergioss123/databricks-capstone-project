@@ -187,6 +187,149 @@ class PapersMCPHelperFunctions:
     def __init__(self, per_page: int = 25):
         self.openalex_client = OpenAlexClient(per_page=per_page)
 
+    @staticmethod
+    def _normalize_openalex_id(openalex_id: Optional[str]) -> Optional[str]:
+        if not openalex_id:
+            return None
+        clean = openalex_id.strip()
+        if not clean:
+            return None
+        return clean.replace("https://openalex.org/", "")
+
+    def _table_has_column(self, table_name: str, column_name: str) -> bool:
+        rows = run_query(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = %s AND column_name = %s
+            ) AS present
+            """,
+            (table_name, column_name),
+        )
+        return bool(rows and rows[0].get("present"))
+
+    def _upsert_paper_from_openalex_work(self, work: dict) -> Optional[str]:
+        """Upsert a paper row from OpenAlex work payload and return local paper id."""
+        if not work:
+            return None
+
+        raw_openalex_id = work.get("id")
+        openalex_id = self._normalize_openalex_id(raw_openalex_id)
+        title = work.get("title") or work.get("display_name")
+        if not openalex_id or not title:
+            return None
+
+        existing = run_query("SELECT id FROM papers WHERE openalex_id = %s LIMIT 1", (openalex_id,))
+        if existing:
+            run_write(
+                """
+                UPDATE papers
+                SET doi = COALESCE(%s, doi),
+                    title = COALESCE(%s, title),
+                    display_name = COALESCE(%s, display_name),
+                    abstract = COALESCE(%s, abstract),
+                    publication_year = COALESCE(%s, publication_year),
+                    cited_by_count = COALESCE(%s, cited_by_count),
+                    landing_page_url = COALESCE(%s, landing_page_url),
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    work.get("doi"),
+                    title,
+                    work.get("display_name"),
+                    self.openalex_client.reconstruct_abstract(work.get("abstract_inverted_index") or {}),
+                    work.get("publication_year"),
+                    work.get("cited_by_count"),
+                    (work.get("primary_location") or {}).get("landing_page_url"),
+                    existing[0]["id"],
+                ),
+            )
+            return existing[0]["id"]
+
+        inserted = run_query(
+            """
+            INSERT INTO papers (
+                openalex_id,
+                doi,
+                title,
+                display_name,
+                abstract,
+                publication_year,
+                cited_by_count,
+                landing_page_url
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                openalex_id,
+                work.get("doi"),
+                title,
+                work.get("display_name"),
+                self.openalex_client.reconstruct_abstract(work.get("abstract_inverted_index") or {}),
+                work.get("publication_year"),
+                work.get("cited_by_count", 0),
+                (work.get("primary_location") or {}).get("landing_page_url"),
+            ),
+        )
+        return inserted[0]["id"] if inserted else None
+
+    def _ensure_goal_collection(
+        self,
+        user_id: str,
+        goal_id: str,
+        goal_title: str,
+        goal_description: Optional[str],
+    ) -> Optional[str]:
+        collections_have_goal = self._table_has_column("collections", "learning_goal_id")
+        existing = run_query(
+            """
+            SELECT id FROM collections
+            WHERE user_id = %s AND name = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (user_id, goal_title),
+        )
+
+        if existing:
+            collection_id = existing[0]["id"]
+            if collections_have_goal:
+                run_write(
+                    """
+                    UPDATE collections
+                    SET learning_goal_id = %s,
+                        description = COALESCE(NULLIF(%s, ''), description),
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (goal_id, goal_description or "", collection_id),
+                )
+            return collection_id
+
+        if collections_have_goal:
+            created = run_query(
+                """
+                INSERT INTO collections (user_id, learning_goal_id, name, description)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (user_id, goal_id, goal_title, goal_description),
+            )
+        else:
+            created = run_query(
+                """
+                INSERT INTO collections (user_id, name, description)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (user_id, goal_title, goal_description),
+            )
+
+        return created[0]["id"] if created else None
+
     def _resolve_name_matches(self, name_value: str) -> tuple[list[dict], Optional[str]]:
         """Resolve a user by name with exact-first, partial-second matching."""
         exact_rows = run_query(
@@ -580,13 +723,12 @@ class PapersMCPHelperFunctions:
         user_id: str = "",
         user_email: str = "",
         user_name: str = "",
-        query: str = "",
+        goal_id: str = "",
         max_papers: int = 10,
-        include_completed: bool = False,
         persist: bool = True,
     ) -> dict:
-        """Create a prioritized reading plan for a user and optionally persist reading_order."""
-        query = (query or "").strip()
+        """Create/refresh a reading plan for a user's learning goal following app.py process."""
+        goal_id = (goal_id or "").strip()
         max_papers = max(1, min(max_papers, 50))
 
         resolution = self._resolve_user(user_id=user_id, user_email=user_email, user_name=user_name)
@@ -597,177 +739,176 @@ class PapersMCPHelperFunctions:
         user_data = resolution["user"]
         resolved_user_id = user_data["id"]
 
-        goal_rows = run_query(
-            """
-            SELECT id, title
-            FROM learning_goals
-            WHERE user_id = %s AND status = 'active'
-            ORDER BY updated_at DESC, created_at DESC
-            LIMIT 1
-            """,
-            (resolved_user_id,),
-        )
-        active_goal_id = goal_rows[0].get("id") if goal_rows else None
-        active_goal_title = goal_rows[0].get("title") if goal_rows else None
-
-        params: list[Any] = [resolved_user_id, resolved_user_id]
-        query_clause = ""
-        if query:
-            query_clause = " AND (p.title ILIKE %s OR COALESCE(p.abstract, '') ILIKE %s)"
-            like_query = f"%{query}%"
-            params.extend([like_query, like_query])
-
-        status_clause = ""
-        if not include_completed:
-            status_clause = " AND COALESCE(rp.status, 'not_started') <> 'completed'"
-
-        params.append(max_papers * 4)
-
-        candidate_rows = run_query(
-            f"""
-            SELECT
-                p.id AS paper_id,
-                p.openalex_id,
-                p.title,
-                p.abstract,
-                p.publication_year,
-                p.cited_by_count,
-                p.doi,
-                p.landing_page_url,
-                COALESCE(rp.status, 'not_started') AS reading_status,
-                COALESCE(rp.progress_percentage, 0) AS progress_percentage,
-                rp.learning_goal_id,
-                BOOL_OR(c.id IS NOT NULL) AS in_collection,
-                BOOL_OR(rp.user_id IS NOT NULL) AS in_reading_plan,
-                MAX(COALESCE(rp.updated_at, cp.added_at, p.updated_at, p.created_at)) AS last_interaction
-            FROM papers p
-            LEFT JOIN collection_papers cp ON cp.paper_id = p.id
-            LEFT JOIN collections c ON c.id = cp.collection_id AND c.user_id = %s
-            LEFT JOIN reading_progress rp ON rp.paper_id = p.id AND rp.user_id = %s
-            WHERE (c.id IS NOT NULL OR rp.user_id IS NOT NULL)
-            {status_clause}
-            {query_clause}
-            GROUP BY p.id, p.openalex_id, p.title, p.abstract, p.publication_year, p.cited_by_count, p.doi, p.landing_page_url, rp.status, rp.progress_percentage, rp.learning_goal_id
-            ORDER BY last_interaction DESC NULLS LAST, p.cited_by_count DESC NULLS LAST
-            LIMIT %s
-            """,
-            tuple(params),
-        )
-
-        if not candidate_rows:
-            return {
-                "status": "success",
-                "resolved_by": resolved_by,
-                "user": user_data,
-                "query": query,
-                "max_papers": max_papers,
-                "persisted": False,
-                "count": 0,
-                "reading_plan": [],
-                "message": "No matching papers found for this user.",
-            }
-
-        current_year = time.gmtime().tm_year
-
-        def _score(row: dict) -> float:
-            status = row.get("reading_status") or "not_started"
-            progress = int(row.get("progress_percentage") or 0)
-            cited = int(row.get("cited_by_count") or 0)
-            pub_year = row.get("publication_year")
-
-            status_weight = {
-                "not_started": 120.0,
-                "in_progress": 90.0,
-                "completed": 10.0,
-            }.get(status, 60.0)
-
-            progress_penalty = progress * 0.35
-            citation_bonus = min(cited, 800) * 0.04
-            recency_bonus = 0.0
-            if isinstance(pub_year, int):
-                recency_bonus = max(0, 8 - max(0, current_year - pub_year))
-
-            collection_bonus = 8.0 if row.get("in_collection") else 0.0
-            existing_plan_bonus = 4.0 if row.get("in_reading_plan") else 0.0
-
-            return status_weight - progress_penalty + citation_bonus + recency_bonus + collection_bonus + existing_plan_bonus
-
-        scored = sorted(candidate_rows, key=_score, reverse=True)[:max_papers]
-
-        plan = []
-        for idx, row in enumerate(scored, start=1):
-            status = row.get("reading_status") or "not_started"
-            reason_parts = []
-            if status == "not_started":
-                reason_parts.append("new paper")
-            elif status == "in_progress":
-                reason_parts.append("continue in-progress")
-            elif status == "completed":
-                reason_parts.append("review completed")
-            if row.get("in_collection"):
-                reason_parts.append("in collection")
-            if int(row.get("cited_by_count") or 0) >= 100:
-                reason_parts.append("highly cited")
-
-            plan.append(
-                {
-                    "order": idx,
-                    "paper_id": row.get("paper_id"),
-                    "openalex_id": row.get("openalex_id"),
-                    "title": row.get("title"),
-                    "publication_year": row.get("publication_year"),
-                    "cited_by_count": row.get("cited_by_count", 0),
-                    "doi": row.get("doi"),
-                    "landing_page_url": row.get("landing_page_url"),
-                    "reading_status": status,
-                    "progress_percentage": row.get("progress_percentage", 0),
-                    "reason": ", ".join(reason_parts) if reason_parts else "recommended",
-                    "summary": summarize_abstract(row.get("abstract") or "", max_length=240),
-                }
+        if goal_id:
+            goal_rows = run_query(
+                """
+                SELECT id, title, description
+                FROM learning_goals
+                WHERE id = %s AND user_id = %s
+                LIMIT 1
+                """,
+                (goal_id, resolved_user_id),
+            )
+        else:
+            goal_rows = run_query(
+                """
+                SELECT id, title, description
+                FROM learning_goals
+                WHERE user_id = %s AND status = 'active'
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (resolved_user_id,),
             )
 
-        persisted_count = 0
-        if persist:
-            for item in plan:
+        if not goal_rows:
+            return {
+                "status": "error",
+                "message": "Learning goal not found for user",
+            }
+
+        goal = goal_rows[0]
+        selected_goal_id = goal["id"]
+        goal_title = goal.get("title") or "Learning Goal"
+        goal_description = goal.get("description")
+
+        like_query = f"%{goal_title}%"
+        local_results = run_query(
+            """
+            SELECT
+                id AS paper_id,
+                openalex_id,
+                title,
+                abstract,
+                publication_year,
+                cited_by_count,
+                doi,
+                landing_page_url
+            FROM papers
+            WHERE title ILIKE %s OR COALESCE(abstract, '') ILIKE %s
+            ORDER BY cited_by_count DESC NULLS LAST, publication_year DESC NULLS LAST
+            LIMIT 20
+            """,
+            (like_query, like_query),
+        )
+
+        source = "local"
+        candidate_papers: list[dict] = local_results
+        if not candidate_papers:
+            response = self.openalex_client.search_works(query=goal_title, per_page=20)
+            candidate_papers = response.get("results", []) if response else []
+            source = "openalex"
+
+        if not candidate_papers:
+            return {
+                "status": "error",
+                "message": "No papers found to build a reading plan",
+                "resolved_by": resolved_by,
+                "user": user_data,
+                "goal": {"id": selected_goal_id, "title": goal_title},
+            }
+
+        sorted_candidates = sorted(
+            candidate_papers,
+            key=lambda p: p.get("publication_year", 0) or 0,
+        )[:max_papers]
+
+        collection_id = self._ensure_goal_collection(
+            user_id=resolved_user_id,
+            goal_id=selected_goal_id,
+            goal_title=goal_title,
+            goal_description=goal_description,
+        )
+
+        papers_ingested = 0
+        plan = []
+
+        for order, paper_data in enumerate(sorted_candidates, start=1):
+            work = paper_data.get("work_data") or paper_data
+            if not work:
+                continue
+
+            paper_id = paper_data.get("paper_id")
+            raw_openalex_id = work.get("id") or paper_data.get("openalex_id")
+            normalized_openalex_id = self._normalize_openalex_id(raw_openalex_id)
+
+            if not paper_id and isinstance(work.get("id"), str) and not work.get("id", "").startswith("https://openalex.org/"):
+                paper_id = work.get("id")
+
+            if not paper_id and normalized_openalex_id:
+                existing = run_query("SELECT id FROM papers WHERE openalex_id = %s LIMIT 1", (normalized_openalex_id,))
+                if existing:
+                    paper_id = existing[0]["id"]
+
+            if not paper_id and source == "openalex":
+                paper_id = self._upsert_paper_from_openalex_work(work)
+
+            if not paper_id:
+                continue
+
+            if collection_id:
                 run_write(
                     """
-                    INSERT INTO reading_progress (
-                        user_id,
-                        paper_id,
-                        learning_goal_id,
-                        reading_order,
-                        status,
-                        progress_percentage,
-                        updated_at
-                    )
-                    VALUES (%s, %s, %s, %s, 'not_started', 0, NOW())
+                    INSERT INTO collection_papers (collection_id, paper_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (collection_id, paper_id) DO NOTHING
+                    """,
+                    (collection_id, paper_id),
+                )
+
+            if persist:
+                run_write(
+                    """
+                    INSERT INTO reading_progress
+                        (user_id, paper_id, learning_goal_id, reading_order, status)
+                    VALUES (%s, %s, %s, %s, 'not_started')
                     ON CONFLICT (user_id, paper_id)
                     DO UPDATE SET
-                        learning_goal_id = COALESCE(EXCLUDED.learning_goal_id, reading_progress.learning_goal_id),
+                        learning_goal_id = EXCLUDED.learning_goal_id,
                         reading_order = EXCLUDED.reading_order,
                         updated_at = NOW()
                     """,
-                    (
-                        resolved_user_id,
-                        item["paper_id"],
-                        active_goal_id,
-                        item["order"],
-                    ),
+                    (resolved_user_id, paper_id, selected_goal_id, order),
                 )
-                persisted_count += 1
+
+            papers_ingested += 1
+            plan.append(
+                {
+                    "paper_id": paper_id,
+                    "openalex_id": normalized_openalex_id,
+                    "title": paper_data.get("title") or work.get("title") or work.get("display_name"),
+                    "order": order,
+                    "publication_year": paper_data.get("publication_year") or work.get("publication_year"),
+                    "status": "not_started",
+                    "source": source,
+                }
+            )
+
+        if papers_ingested == 0:
+            return {
+                "status": "error",
+                "message": "No papers could be added to the reading plan",
+                "resolved_by": resolved_by,
+                "user": user_data,
+                "goal": {"id": selected_goal_id, "title": goal_title},
+            }
 
         return {
             "status": "success",
             "resolved_by": resolved_by,
             "user": user_data,
-            "query": query,
+            "goal": {
+                "id": selected_goal_id,
+                "title": goal_title,
+                "description": goal_description,
+            },
+            "collection": {
+                "id": collection_id,
+                "name": goal_title,
+            },
             "max_papers": max_papers,
             "persisted": persist,
-            "persisted_count": persisted_count,
-            "active_learning_goal": {
-                "id": active_goal_id,
-                "title": active_goal_title,
-            },
+            "papers_ingested": papers_ingested,
             "count": len(plan),
             "reading_plan": plan,
         }

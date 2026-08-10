@@ -100,9 +100,8 @@ def create_user_reading_plan(
     user_id: str = "",
     user_email: str = "",
     user_name: str = "",
-    query: str = "",
+    goal_id: str = "",
     max_papers: int = 10,
-    include_completed: bool = False,
     persist: bool = True,
 ) -> dict:
     """
@@ -112,18 +111,16 @@ def create_user_reading_plan(
         user_id: Optional application user id
         user_email: Optional user email
         user_name: Optional user name (must resolve uniquely)
-        query: Optional topic filter on title/abstract
+        goal_id: Optional learning goal id; if omitted, latest active goal is used
         max_papers: Number of papers to include (1-50)
-        include_completed: Whether completed papers can be part of the plan
         persist: If true, write reading_order into reading_progress
     """
     return papers_helper.create_user_reading_plan(
         user_id=user_id,
         user_email=user_email,
         user_name=user_name,
-        query=query,
+        goal_id=goal_id,
         max_papers=max_papers,
-        include_completed=include_completed,
         persist=persist,
     )
 
@@ -141,6 +138,6 @@ if __name__ == "__main__":
     logger.info("  2. get_paper_summary(openalex_id)")
     logger.info("  3. request_openalex_api(endpoint, params=None)")
     logger.info("  4. search_user_papers(user_id='', user_email='', user_name='', query='', limit=20)")
-    logger.info("  5. create_user_reading_plan(user_id='', user_email='', user_name='', query='', max_papers=10, include_completed=False, persist=True)")
+    logger.info("  5. create_user_reading_plan(user_id='', user_email='', user_name='', goal_id='', max_papers=10, persist=True)")
 
     mcp.run(transport="http", host="0.0.0.0", port=port)

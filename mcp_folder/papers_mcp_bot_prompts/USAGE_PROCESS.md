@@ -33,7 +33,13 @@ If missing, ask one targeted clarification question before calling tools.
 3. Highlight reading status and collection membership.
 4. If name resolves to multiple users, ask for `user_id` or `user_email`.
 
-### D) Raw OpenAlex
+### D) Create Reading Plan
+1. Call `create_user_reading_plan(user_id, user_email, user_name, goal_id, max_papers, persist)`.
+2. Prefer setting `goal_id` when user specifies a learning goal.
+3. Return goal, collection, and ordered reading plan entries.
+4. If `persist=true`, confirm that reading order was written to `reading_progress`.
+
+### E) Raw OpenAlex
 1. Call `request_openalex_api(endpoint, params)`.
 2. Summarize key fields unless user requested full JSON.
 

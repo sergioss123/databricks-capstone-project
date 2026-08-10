@@ -747,28 +747,74 @@ class PapersMCPHelperFunctions:
                 "message": "Provide goal_id or goal_title to create a reading plan",
             }
 
+        learning_goals_have_user = self._table_has_column("learning_goals", "user_id")
+        collections_have_goal = self._table_has_column("collections", "learning_goal_id")
+
         if goal_id:
-            goal_rows = run_query(
-                """
-                SELECT id, title, description
-                FROM learning_goals
-                WHERE id = %s AND user_id = %s
-                LIMIT 1
-                """,
-                (goal_id, resolved_user_id),
-            )
+            if learning_goals_have_user:
+                goal_rows = run_query(
+                    """
+                    SELECT id, title, description
+                    FROM learning_goals
+                    WHERE id = %s AND user_id = %s
+                    LIMIT 1
+                    """,
+                    (goal_id, resolved_user_id),
+                )
+            elif collections_have_goal:
+                goal_rows = run_query(
+                    """
+                    SELECT lg.id, lg.title, lg.description
+                    FROM learning_goals lg
+                    JOIN collections c ON c.learning_goal_id = lg.id
+                    WHERE lg.id = %s AND c.user_id = %s
+                    ORDER BY lg.updated_at DESC, lg.created_at DESC
+                    LIMIT 1
+                    """,
+                    (goal_id, resolved_user_id),
+                )
+            else:
+                goal_rows = run_query(
+                    """
+                    SELECT id, title, description
+                    FROM learning_goals
+                    WHERE id = %s
+                    LIMIT 1
+                    """,
+                    (goal_id,),
+                )
         else:
-            goal_rows = run_query(
-                """
-                SELECT id, title, description
-                FROM learning_goals
-                WHERE user_id = %s
-                  AND LOWER(title) = LOWER(%s)
-                ORDER BY updated_at DESC, created_at DESC
-                LIMIT 2
-                """,
-                (resolved_user_id, goal_title),
-            )
+            if learning_goals_have_user:
+                goal_rows = run_query(
+                    """
+                    SELECT id, title, description
+                    FROM learning_goals
+                    WHERE user_id = %s
+                      AND LOWER(title) = LOWER(%s)
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT 2
+                    """,
+                    (resolved_user_id, goal_title),
+                )
+            elif collections_have_goal:
+                goal_rows = run_query(
+                    """
+                    SELECT lg.id, lg.title, lg.description
+                    FROM learning_goals lg
+                    JOIN collections c ON c.learning_goal_id = lg.id
+                    WHERE c.user_id = %s
+                      AND LOWER(lg.title) = LOWER(%s)
+                    ORDER BY lg.updated_at DESC, lg.created_at DESC
+                    LIMIT 2
+                    """,
+                    (resolved_user_id, goal_title),
+                )
+            else:
+                return {
+                    "status": "error",
+                    "message": "Cannot resolve user-scoped learning goal by title in this schema. Provide goal_id.",
+                }
+
             if len(goal_rows) > 1:
                 return {
                     "status": "error",

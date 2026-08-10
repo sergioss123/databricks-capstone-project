@@ -216,25 +216,25 @@ CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes (created_at);
 -- Enable pgvector extension for vector similarity search
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Add embedding columns to papers (1024 dimensions for databricks-bge-large-en)
-ALTER TABLE papers ADD COLUMN IF NOT EXISTS abstract_embedding vector(1024);
-ALTER TABLE papers ADD COLUMN IF NOT EXISTS content_embedding vector(1024);
-ALTER TABLE papers ADD COLUMN IF NOT EXISTS abstract_embedding_model TEXT DEFAULT 'text-embedding-ada-002';
+-- Add embedding columns to papers (384 dimensions for sentence-transformers/all-MiniLM-L6-v2)
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS abstract_embedding vector(384);
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS content_embedding vector(384);
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS abstract_embedding_model TEXT DEFAULT 'sentence-transformers/all-MiniLM-L6-v2';
 ALTER TABLE papers ADD COLUMN IF NOT EXISTS abstract_embedding_generated_at TIMESTAMPTZ;
 
 -- Add embedding columns to learning_goals
-ALTER TABLE learning_goals ADD COLUMN IF NOT EXISTS description_embedding vector(1024);
-ALTER TABLE learning_goals ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'text-embedding-ada-002';
+ALTER TABLE learning_goals ADD COLUMN IF NOT EXISTS description_embedding vector(384);
+ALTER TABLE learning_goals ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'sentence-transformers/all-MiniLM-L6-v2';
 ALTER TABLE learning_goals ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ;
 
 -- Add embedding columns to notes
-ALTER TABLE notes ADD COLUMN IF NOT EXISTS content_embedding vector(1024);
-ALTER TABLE notes ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'text-embedding-ada-002';
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS content_embedding vector(384);
+ALTER TABLE notes ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'sentence-transformers/all-MiniLM-L6-v2';
 ALTER TABLE notes ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ;
 
 -- Add embedding columns to collections
-ALTER TABLE collections ADD COLUMN IF NOT EXISTS description_embedding vector(1024);
-ALTER TABLE collections ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'text-embedding-ada-002';
+ALTER TABLE collections ADD COLUMN IF NOT EXISTS description_embedding vector(384);
+ALTER TABLE collections ADD COLUMN IF NOT EXISTS embedding_model TEXT DEFAULT 'sentence-transformers/all-MiniLM-L6-v2';
 ALTER TABLE collections ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ;
 
 -- ===========================
@@ -287,8 +287,8 @@ CREATE TABLE IF NOT EXISTS paper_chunks (
     start_char INTEGER NOT NULL,
     end_char INTEGER NOT NULL,
     word_count INTEGER NOT NULL,
-    chunk_embedding vector(1024),
-    embedding_model TEXT DEFAULT 'databricks-bge-large-en',
+    chunk_embedding vector(384),
+    embedding_model TEXT DEFAULT 'sentence-transformers/all-MiniLM-L6-v2',
     embedding_generated_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

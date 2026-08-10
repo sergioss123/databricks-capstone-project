@@ -19,6 +19,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 import lakebase
 from databricks.sdk import WorkspaceClient
+from sentence_transformers import SentenceTransformer
 
 
 class OpenAlexClient:
@@ -277,95 +278,64 @@ class OpenAlexClient:
 
 
 class EmbeddingGenerator:
-    """Generate embeddings using Databricks Foundation Model API"""
+    """Generate embeddings using a local sentence-transformers model."""
     
-    def __init__(self, databricks_token: str, databricks_host: str, 
-                 model: str = "databricks-bge-large-en"):
-        """
-        Initialize Databricks embedding generator
-        
-        Args:
-            databricks_token: Databricks personal access token
-            databricks_host: Databricks workspace URL (e.g., https://your-workspace.cloud.databricks.com)
-            model: Embedding model name (default: databricks-bge-large-en)
-                   Available models:
-                   - databricks-bge-large-en (1024 dimensions)
-                   - databricks-gte-large-en (1024 dimensions)
-        """
-        self.databricks_token = databricks_token
-        self.databricks_host = databricks_host.rstrip('/')
+    def __init__(
+        self,
+        model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        cache_folder: str = "/tmp/.cache/huggingface",
+    ):
+        """Initialize the embedding model and cache location."""
         self.model = model
-        self.dimension = 1024  # BGE/GTE large models dimension
-        self.endpoint = f"{self.databricks_host}/serving-endpoints/{model}/invocations"
+        self.cache_folder = cache_folder
+
+        print(f"Loading embedding model {model}...")
+        self._model = SentenceTransformer(model, cache_folder=cache_folder)
+        self.dimension = self._model.get_sentence_embedding_dimension()
+        print(f"✓ Model loaded successfully (dimension: {self.dimension})")
     
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for a single text"""
         if not text or not text.strip():
             print("Warning: Empty text provided for embedding generation")
             return None
-        
-        headers = {
-            "Authorization": f"Bearer {self.databricks_token}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "input": text.strip()
-        }
-        
+
         try:
-            response = requests.post(self.endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            embedding = result['data'][0]['embedding']
+            embedding = self._model.encode(
+                text.strip(),
+                show_progress_bar=False,
+                normalize_embeddings=True,
+            )
             print(f"✓ Generated embedding with {len(embedding)} dimensions")
-            return embedding
-        except requests.exceptions.HTTPError as e:
-            print(f"❌ HTTP Error generating embedding: {e}")
-            print(f"   Status code: {e.response.status_code}")
-            print(f"   Response: {e.response.text[:200]}")
-            return None
+            return embedding.tolist()
         except Exception as e:
             print(f"❌ Error generating embedding: {e}")
-            print(f"   Endpoint: {self.endpoint}")
             print(f"   Text length: {len(text)} chars")
             return None
     
-    def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+    def generate_embeddings_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         """Generate embeddings for multiple texts in batch"""
-        # Filter out empty texts
         valid_texts = [t.strip() for t in texts if t and t.strip()]
         
         if not valid_texts:
             print("Warning: No valid texts provided for batch embedding generation")
             return []
         
-        headers = {
-            "Authorization": f"Bearer {self.databricks_token}",
-            "Content-Type": "application/json"
-        }
-        
-        # Databricks Foundation Model API supports batch input
-        payload = {
-            "input": valid_texts
-        }
-        
         try:
             print(f"Generating embeddings for {len(valid_texts)} texts...")
-            response = requests.post(self.endpoint, json=payload, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            embeddings = [item['embedding'] for item in result['data']]
+            embeddings = []
+            for i in range(0, len(valid_texts), batch_size):
+                batch = valid_texts[i:i + batch_size]
+                batch_embeddings = self._model.encode(
+                    batch,
+                    show_progress_bar=False,
+                    normalize_embeddings=True,
+                )
+                embeddings.extend(batch_embeddings.tolist())
             print(f"✓ Successfully generated {len(embeddings)} embeddings")
             return embeddings
-        except requests.exceptions.HTTPError as e:
-            print(f"❌ HTTP Error generating batch embeddings: {e}")
-            print(f"   Status code: {e.response.status_code}")
-            print(f"   Response: {e.response.text[:500]}")
-            return []
         except Exception as e:
             print(f"❌ Error generating batch embeddings: {e}")
-            print(f"   Endpoint: {self.endpoint}")
             print(f"   Batch size: {len(valid_texts)}")
             return []
 
@@ -750,11 +720,7 @@ class PaperIngestion:
         databricks_host = w.config.host
         databricks_token = w.config.token.value if hasattr(w.config.token, 'value') else str(w.config.token)
         
-        embedding_generator = EmbeddingGenerator(
-            databricks_token=databricks_token,
-            databricks_host=databricks_host,
-            model="databricks-bge-large-en"
-        )
+        embedding_generator = EmbeddingGenerator()
         
         # Extract OpenAlex ID
         openalex_id = openalex_work.get('id', '')

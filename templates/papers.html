@@ -25,6 +25,12 @@
             <div>
                 <h2 style="margin-bottom: 4px;">{{ collection.name }}</h2>
                 <p style="color: #666;">{{ collection.paper_count }} papers{% if collection.description %} · {{ collection.description }}{% endif %}</p>
+                <div style="margin-top: 10px; background: #e8e8e8; border-radius: 999px; height: 10px; overflow: hidden; max-width: 420px;">
+                    <div style="width: {{ collection.progress }}%; height: 100%; background: linear-gradient(135deg, #667eea, #764ba2);"></div>
+                </div>
+                <div style="color: #666; font-size: 13px; margin-top: 6px;">
+                    {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
+                </div>
             </div>
         </div>
 
@@ -32,12 +38,24 @@
         <div style="display: grid; gap: 12px;">
             {% for paper in collection.papers %}
             <div style="padding: 14px 16px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa;">
-                <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
-                    {{ paper.title }}
-                </a>
-                {% if paper.doi %}
-                <div style="font-size: 12px; color: #777; margin-top: 6px;">DOI: {{ paper.doi }}</div>
-                {% endif %}
+                <div style="display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: start;">
+                    <div style="flex: 1; min-width: 0;">
+                        <a href="{{ paper.landing_page_url or url_for('paper_detail', paper_id=paper.id) }}" target="_blank" rel="noopener noreferrer" style="font-weight: 600; color: #223; text-decoration: none;">
+                            {{ paper.title }}
+                        </a>
+                        {% if paper.doi %}
+                        <div style="font-size: 12px; color: #777; margin-top: 6px;">DOI: {{ paper.doi }}</div>
+                        {% endif %}
+                        {% if paper.summary %}
+                        <p style="color: #666; font-size: 13px; margin-top: 8px;">{{ paper.summary }}</p>
+                        {% endif %}
+                    </div>
+                    <div style="text-align: right; min-width: 190px;">
+                        <div style="font-size: 12px; color: #666; margin-bottom: 8px;">{{ paper.status | default('not_started') | replace('_', ' ') | title }}</div>
+                        <button class="btn btn-primary" style="padding: 8px 12px; font-size: 13px;" onclick="updatePaperStatus('{{ paper.id }}', 'in_progress')">Mark In Progress</button>
+                        <button class="btn" style="padding: 8px 12px; font-size: 13px; margin-top: 8px; background: #4caf50; color: white;" onclick="updatePaperStatus('{{ paper.id }}', 'completed')">Mark Read</button>
+                    </div>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -47,4 +65,26 @@
     </div>
     {% endfor %}
 </div>
+
+<script>
+function updatePaperStatus(paperId, status) {
+    fetch('/api/paper/update-status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ paper_id: paperId, status: status })
+    })
+    .then(resp => resp.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to update status');
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Failed to update status');
+    });
+}
+</script>
 {% endblock %}

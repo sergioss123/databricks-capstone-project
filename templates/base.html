@@ -235,10 +235,6 @@
                     onclick="window.location.href='{{ url_for('dashboard') }}'">
                 📊 Dashboard
             </button>
-            <button class="tab {% if active_tab == 'papers' %}active{% endif %}"
-                    onclick="window.location.href='{{ url_for('papers') }}'">
-                📚 Papers
-            </button>
             <button class="tab {% if active_tab == 'goals' %}active{% endif %}"
                     onclick="window.location.href='{{ url_for('learning_goals') }}'">
                 🎯 Learning Goals

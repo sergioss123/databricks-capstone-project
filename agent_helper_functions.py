@@ -750,34 +750,43 @@ class PaperIngestion:
             venue_openalex_id = source['id']
             if venue_openalex_id.startswith('https://openalex.org/'):
                 venue_openalex_id = venue_openalex_id.split('/')[-1]
-            
-            venue_id = lakebase.run_query(
-                "SELECT id FROM venues WHERE openalex_id = %s",
-                (venue_openalex_id,)
-            )
-            
-            if not venue_id:
-                venue_result = lakebase.run_query(
-                    """
-                    INSERT INTO venues (
-                        openalex_id, display_name, issn_l, issn, is_oa, type, host_organization
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        venue_openalex_id,
-                        source.get('display_name'),
-                        source.get('issn_l'),
-                        json.dumps(source.get('issn', [])),
-                        source.get('is_oa', False),
-                        source.get('type'),
-                        source.get('host_organization_name')
-                    )
-                )
-                venue_id = venue_result[0]['id'] if venue_result else None
-            else:
-                venue_id = venue_id[0]['id']
+
+            try:
+                with lakebase.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT id FROM venues WHERE openalex_id = %s",
+                            (venue_openalex_id,)
+                        )
+                        venue_row = cursor.fetchone()
+
+                        if venue_row:
+                            venue_id = venue_row['id']
+                        else:
+                            cursor.execute(
+                                """
+                                INSERT INTO venues (
+                                    openalex_id, display_name, issn_l, issn, is_oa, type, host_organization
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                RETURNING id
+                                """,
+                                (
+                                    venue_openalex_id,
+                                    source.get('display_name'),
+                                    source.get('issn_l'),
+                                    json.dumps(source.get('issn', [])),
+                                    source.get('is_oa', False),
+                                    source.get('type'),
+                                    source.get('host_organization_name')
+                                )
+                            )
+                            venue_result = cursor.fetchone()
+                            conn.commit()
+                            venue_id = venue_result['id'] if venue_result else None
+            except Exception as venue_error:
+                print(f"⚠ Could not resolve venue {venue_openalex_id}: {venue_error}")
+                venue_id = None
         
         # Generate abstract embedding
         abstract_embedding = None

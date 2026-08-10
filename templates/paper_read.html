@@ -57,6 +57,13 @@
 
     <!-- Paper Content -->
     <div class="card" style="margin-bottom: 20px;">
+        {% if paper['abstract'] %}
+        <div style="margin-bottom: 18px; padding: 14px 16px; background: #f7f7ff; border-left: 4px solid #667eea; border-radius: 8px;">
+            <div style="font-size: 12px; color: #667eea; font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em;">Summary</div>
+            <p style="margin: 0; line-height: 1.7; color: #333;">{{ paper['abstract'][:320] }}{% if paper['abstract']|length > 320 %}...{% endif %}</p>
+        </div>
+        {% endif %}
+
         <h2 style="color: #667eea; margin-bottom: 20px; font-size: 20px;">📄 Abstract</h2>
         {% if paper['abstract'] %}
         <p style="line-height: 1.8; color: #333; text-align: justify;">

@@ -6,7 +6,7 @@
 <div style="max-width: 1200px; margin: 0 auto;">
     <div style="margin-bottom: 24px;">
         <h1 style="margin-bottom: 8px;">🎯 Learning Goals</h1>
-        <p style="color: #666;">Each goal shows its reading plan and progress in one place.</p>
+        <p style="color: #666;">Each goal shows the collections tied to it.</p>
     </div>
 
     {% if not goals %}
@@ -26,34 +26,35 @@
                 {% endif %}
             </div>
             <div style="min-width: 120px; text-align: right;">
-                <div style="font-size: 40px; font-weight: 700; color: #667eea;">{{ goal.progress }}%</div>
-                <div style="color: #666;">Progress</div>
+                <div style="font-size: 40px; font-weight: 700; color: #667eea;">{{ goal.collection_count }}</div>
+                <div style="color: #666;">Collections</div>
             </div>
         </div>
 
-        {% if goal.reading_plan %}
+        {% if goal.collections %}
         <div style="display: grid; gap: 12px;">
-            {% for paper in goal.reading_plan %}
-            <div style="border: 1px solid #ececec; border-left: 4px solid {% if paper.status == 'completed' %}#4caf50{% elif paper.status == 'in_progress' %}#ff9800{% else %}#667eea{% endif %}; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
+            {% for collection in goal.collections %}
+            <div style="border: 1px solid #ececec; border-radius: 8px; padding: 14px 16px; background: #fafafa;">
                 <div style="display: flex; justify-content: space-between; gap: 12px; align-items: start; flex-wrap: wrap;">
-                    <div>
-                        <div style="font-size: 12px; color: #888; margin-bottom: 6px;">Paper {{ paper.reading_order }}</div>
-                        <a href="{{ url_for('paper_detail', paper_id=paper.paper_id) }}" style="font-size: 16px; font-weight: 600; color: #223; text-decoration: none;">
-                            {{ paper.title }}
-                        </a>
-                        <div style="color: #777; font-size: 13px; margin-top: 6px;">
-                            {% if paper.publication_year %}{{ paper.publication_year }}{% endif %}
-                            {% if paper.cited_by_count %} · {{ paper.cited_by_count }} citations{% endif %}
-                            {% if paper.last_read_at %} · last read {{ paper.last_read_at }}{% endif %}
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 12px; color: #888; margin-bottom: 6px;">{{ collection.paper_count }} papers</div>
+                        <div style="font-size: 16px; font-weight: 600; color: #223;">{{ collection.name }}</div>
+                        {% if collection.description %}
+                        <div style="color: #777; font-size: 13px; margin-top: 6px;">{{ collection.description }}</div>
+                        {% endif %}
+                        <div style="margin-top: 10px; background: #e8e8e8; border-radius: 999px; height: 10px; overflow: hidden; max-width: 420px;">
+                            <div style="width: {{ collection.progress }}%; height: 100%; background: linear-gradient(135deg, #667eea, #764ba2);"></div>
+                        </div>
+                        <div style="color: #666; font-size: 13px; margin-top: 6px;">
+                            {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
                         </div>
                     </div>
-                    <div style="color: #666; font-size: 13px;">{{ paper.status | replace('_', ' ') | title }}</div>
                 </div>
             </div>
             {% endfor %}
         </div>
         {% else %}
-        <p style="color: #999; margin-top: 8px;">No reading plan created for this goal yet.</p>
+        <p style="color: #999; margin-top: 8px;">No collections linked to this goal yet.</p>
         {% endif %}
     </div>
     {% endfor %}

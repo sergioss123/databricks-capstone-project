@@ -34,13 +34,24 @@
         <h2 style="margin-bottom: 12px;">Search Results</h2>
         {% if search_results %}
         <form id="createCollectionForm">
-            <div class="form-group">
-                <label for="collectionName">Collection name</label>
-                <input id="collectionName" class="form-control" placeholder="e.g., Deep Learning Papers">
-            </div>
-            <div class="form-group">
-                <label for="collectionDescription">Collection description</label>
-                <input id="collectionDescription" class="form-control" placeholder="Short note about this collection">
+            <div style="display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr));">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="collectionName">Collection name</label>
+                    <input id="collectionName" class="form-control" placeholder="e.g., Deep Learning Papers">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="collectionDescription">Collection description</label>
+                    <input id="collectionDescription" class="form-control" placeholder="Short note about this collection">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="learningGoalId">Learning goal</label>
+                    <select id="learningGoalId" class="form-control">
+                        <option value="">No learning goal</option>
+                        {% for goal in learning_goals %}
+                        <option value="{{ goal.id }}">{{ goal.title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
             <p style="color: #666; margin-bottom: 16px;">
                 {% if search_is_semantic %}
@@ -93,8 +104,16 @@
                     <div>
                         <h3 style="margin-bottom: 4px;">{{ collection.name }}</h3>
                         <p style="color: #666;">{{ collection.paper_count }} papers{% if collection.description %} · {{ collection.description }}{% endif %}</p>
+                        {% if collection.learning_goal_title %}
+                        <p style="color: #666; font-size: 13px; margin-top: 4px;">Learning goal: {{ collection.learning_goal_title }}</p>
+                        {% endif %}
+                        <div style="margin-top: 10px; background: #e8e8e8; border-radius: 999px; height: 10px; overflow: hidden; max-width: 420px;">
+                            <div style="width: {{ collection.progress }}%; height: 100%; background: linear-gradient(135deg, #667eea, #764ba2);"></div>
+                        </div>
+                        <div style="color: #666; font-size: 13px; margin-top: 6px;">
+                            {{ collection.progress }}% complete · {{ collection.completed_papers }} completed · {{ collection.in_progress_papers }} in progress
+                        </div>
                     </div>
-                    <a href="{{ url_for('papers') }}" class="btn btn-secondary">Open papers view</a>
                 </div>
             </div>
             {% endfor %}
@@ -110,6 +129,7 @@ function createCollection() {
     const form = document.getElementById('createCollectionForm');
     const name = document.getElementById('collectionName').value.trim();
     const description = document.getElementById('collectionDescription').value.trim();
+    const learningGoalId = document.getElementById('learningGoalId').value.trim();
     const paperIds = [...form.querySelectorAll('input[name="paper_ids"]:checked')].map(el => el.value);
     const openalexIds = [...form.querySelectorAll('input[name="openalex_ids"]:checked')].map(el => el.value);
 
@@ -126,7 +146,7 @@ function createCollection() {
     fetch('/api/collections/create', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ name, description, paper_ids: paperIds, openalex_ids: openalexIds })
+        body: JSON.stringify({ name, description, learning_goal_id: learningGoalId, paper_ids: paperIds, openalex_ids: openalexIds })
     })
     .then(resp => resp.json())
     .then(data => {

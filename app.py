@@ -14,6 +14,7 @@ import os
 import re
 import json
 from datetime import datetime
+from typing import Optional
 
 import requests
 from databricks.sdk import WorkspaceClient
@@ -63,6 +64,17 @@ def table_has_column(table_name: str, column_name: str) -> bool:
     present = bool(rows and rows[0].get('present'))
     _schema_column_cache[cache_key] = present
     return present
+
+
+def summarize_abstract(abstract: Optional[str], max_length: int = 220) -> str:
+    """Build a short display summary from a paper abstract."""
+    if not abstract:
+        return ""
+
+    text = abstract.strip().replace('\n', ' ')
+    if len(text) <= max_length:
+        return text
+    return text[:max_length].rsplit(' ', 1)[0] + '...'
 
 # ===========================
 # Database Initialization Functions
@@ -246,17 +258,22 @@ def ensure_collections_table():
         CREATE TABLE IF NOT EXISTS collections (
             id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
             user_id TEXT NOT NULL,
+            learning_goal_id TEXT,
             name TEXT NOT NULL,
             description TEXT,
             is_public BOOLEAN DEFAULT false,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (learning_goal_id) REFERENCES learning_goals(id) ON DELETE SET NULL
         )
         """
     )
     lakebase.run_write(
         "CREATE INDEX IF NOT EXISTS idx_collections_user_id ON collections (user_id)"
+    )
+    lakebase.run_write(
+        "CREATE INDEX IF NOT EXISTS idx_collections_learning_goal_id ON collections (learning_goal_id)"
     )
     lakebase.run_write(
         "CREATE INDEX IF NOT EXISTS idx_collections_is_public ON collections (is_public)"
@@ -864,6 +881,13 @@ def api_initialize_create_plan():
         return jsonify({'success': False, 'error': 'Missing required fields'}), 400
     
     try:
+        goal_row = lakebase.run_query(
+            "SELECT title, description FROM learning_goals WHERE id = %s AND user_id = %s",
+            (goal_id, user_id)
+        )
+        goal_title = goal_row[0]['title'] if goal_row else 'Reading Plan'
+        collection_name = goal_title
+
         # Sort papers by publication_date (oldest first), take top 10
         sorted_papers = sorted(
             papers,
@@ -872,6 +896,35 @@ def api_initialize_create_plan():
         
         papers_ingested = 0
         reading_plan = []
+        collection_id = None
+
+        with lakebase.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id FROM collections
+                    WHERE user_id = %s AND name = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (user_id, collection_name)
+                )
+                existing_collection = cur.fetchone()
+
+                if existing_collection:
+                    collection_id = existing_collection['id']
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO collections (user_id, name, description)
+                        VALUES (%s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user_id, collection_name, goal_row[0]['description'] if goal_row else None)
+                    )
+                    created_collection = cur.fetchone()
+                    collection_id = created_collection['id'] if created_collection else None
+                conn.commit()
         
         for order, paper_data in enumerate(sorted_papers, start=1):
             try:
@@ -905,6 +958,19 @@ def api_initialize_create_plan():
                         paper_id = existing_paper[0]['id']
                 
                 if paper_id:
+                    if collection_id:
+                        with lakebase.get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    """
+                                    INSERT INTO collection_papers (collection_id, paper_id)
+                                    VALUES (%s, %s)
+                                    ON CONFLICT (collection_id, paper_id) DO NOTHING
+                                    """,
+                                    (collection_id, paper_id)
+                                )
+                                conn.commit()
+
                     # Create reading progress entry with reading order
                     with lakebase.get_connection() as conn:
                         with conn.cursor() as cur:
@@ -948,7 +1014,9 @@ def api_initialize_create_plan():
             'success': True,
             'papers_ingested': papers_ingested,
             'reading_plan': reading_plan,
-            'goal_id': goal_id
+            'goal_id': goal_id,
+            'collection_id': collection_id,
+            'collection_name': collection_name
         })
     
     except Exception as e:
@@ -1184,17 +1252,30 @@ def papers():
             SELECT
                 p.id,
                 p.title,
+                p.abstract,
                 p.landing_page_url,
                 p.doi,
+                rp.status,
+                rp.progress_percentage,
                 COALESCE(cp.notes, '') AS notes,
                 cp.added_at
             FROM collection_papers cp
             JOIN papers p ON p.id = cp.paper_id
+            LEFT JOIN reading_progress rp ON rp.paper_id = p.id AND rp.user_id = %s
             WHERE cp.collection_id = %s
             ORDER BY cp.added_at ASC, p.title ASC
             """,
-            (collection['id'],)
+            (user['id'], collection['id'])
         )
+        total_papers = len(collection['papers'])
+        completed_papers = sum(1 for paper in collection['papers'] if paper.get('status') == 'completed')
+        in_progress_papers = sum(1 for paper in collection['papers'] if paper.get('status') == 'in_progress')
+        collection['progress'] = int((completed_papers / total_papers) * 100) if total_papers else 0
+        collection['completed_papers'] = completed_papers
+        collection['in_progress_papers'] = in_progress_papers
+        collection['total_papers'] = total_papers
+        for paper in collection['papers']:
+            paper['summary'] = summarize_abstract(paper.get('abstract'))
 
     return render_template(
         "papers.html",
@@ -1206,12 +1287,14 @@ def papers():
 @app.route("/learning-goals")
 @require_login
 def learning_goals():
-    """Learning goals page with reading plans."""
+    """Learning goals page with collections grouped by goal."""
     user = get_current_user()
     if not user:
         session.clear()
         return redirect(url_for('login'))
     
+    collections_have_goal = table_has_column('collections', 'learning_goal_id')
+
     # Get all learning goals for the user
     goals = lakebase.run_query(
         """
@@ -1223,65 +1306,41 @@ def learning_goals():
         (user['id'],)
     )
     
-    # For each goal, get the reading plan
-    has_reading_order = table_has_column('reading_progress', 'reading_order')
     for goal in goals:
-        if has_reading_order:
-            reading_plan = lakebase.run_query(
+        if collections_have_goal:
+            collections_for_goal = lakebase.run_query(
                 """
-                SELECT 
-                    rp.id,
-                    rp.paper_id,
-                    rp.reading_order,
-                    rp.status,
-                    rp.progress_percentage,
-                    rp.last_read_at,
-                    p.title,
-                    p.abstract,
-                    p.publication_year,
-                    p.publication_date,
-                    p.doi,
-                    p.landing_page_url,
-                    p.cited_by_count
-                FROM reading_progress rp
-                JOIN papers p ON rp.paper_id = p.id
-                WHERE rp.user_id = %s AND rp.learning_goal_id = %s
-                ORDER BY rp.reading_order ASC
+                SELECT
+                    c.id,
+                    c.name,
+                    c.description,
+                    c.created_at,
+                    COUNT(cp.paper_id) AS paper_count,
+                    COALESCE(SUM(CASE WHEN rp.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_papers,
+                    COALESCE(SUM(CASE WHEN rp.status = 'in_progress' THEN 1 ELSE 0 END), 0) AS in_progress_papers
+                FROM collections c
+                LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+                LEFT JOIN papers p ON p.id = cp.paper_id
+                LEFT JOIN reading_progress rp ON rp.paper_id = p.id AND rp.user_id = %s
+                WHERE c.user_id = %s AND c.learning_goal_id = %s
+                GROUP BY c.id, c.name, c.description, c.created_at
+                ORDER BY c.created_at DESC
                 """,
-                (user['id'], goal['id'])
+                (user['id'], user['id'], goal['id'])
             )
+
+            for collection in collections_for_goal:
+                total_papers = int(collection.get('paper_count') or 0)
+                completed_papers = int(collection.get('completed_papers') or 0)
+                collection['progress'] = int((completed_papers / total_papers) * 100) if total_papers else 0
+                collection['completed_papers'] = completed_papers
+                collection['in_progress_papers'] = int(collection.get('in_progress_papers') or 0)
+
+            goal['collections'] = collections_for_goal
+            goal['collection_count'] = len(collections_for_goal)
         else:
-            reading_plan = lakebase.run_query(
-                """
-                SELECT 
-                    rp.id,
-                    rp.paper_id,
-                    NULL::integer AS reading_order,
-                    rp.status,
-                    rp.progress_percentage,
-                    rp.last_read_at,
-                    p.title,
-                    p.abstract,
-                    p.publication_year,
-                    p.publication_date,
-                    p.doi,
-                    p.landing_page_url,
-                    p.cited_by_count
-                FROM reading_progress rp
-                JOIN papers p ON rp.paper_id = p.id
-                WHERE rp.user_id = %s AND rp.learning_goal_id = %s
-                ORDER BY rp.created_at ASC, rp.id ASC
-                """,
-                (user['id'], goal['id'])
-            )
-        goal['reading_plan'] = reading_plan
-        
-        # Calculate progress
-        if reading_plan:
-            completed = sum(1 for p in reading_plan if p['status'] == 'completed')
-            goal['progress'] = int((completed / len(reading_plan)) * 100)
-        else:
-            goal['progress'] = 0
+            goal['collections'] = []
+            goal['collection_count'] = 0
     
     return render_template(
         "learning_goals.html",
@@ -1300,6 +1359,7 @@ def collections():
         session.clear()
         return redirect(url_for('login'))
 
+    collections_have_goal = table_has_column('collections', 'learning_goal_id')
     search_query = request.args.get('query', '').strip()
     search_mode = request.args.get('mode', 'api')
     search_results = []
@@ -1344,22 +1404,45 @@ def collections():
                         'relevance_score': None,
                     })
 
-    collections = lakebase.run_query(
-        """
-        SELECT
-            c.id,
-            c.name,
-            c.description,
-            c.created_at,
-            COUNT(cp.paper_id) AS paper_count
-        FROM collections c
-        LEFT JOIN collection_papers cp ON cp.collection_id = c.id
-        WHERE c.user_id = %s
-        GROUP BY c.id, c.name, c.description, c.created_at
-        ORDER BY c.created_at DESC
-        """,
-        (user['id'],)
-    )
+    if collections_have_goal:
+        collections = lakebase.run_query(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                c.learning_goal_id,
+                lg.title AS learning_goal_title,
+                c.created_at,
+                COUNT(cp.paper_id) AS paper_count
+            FROM collections c
+            LEFT JOIN learning_goals lg ON lg.id = c.learning_goal_id
+            LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+            WHERE c.user_id = %s
+            GROUP BY c.id, c.name, c.description, c.learning_goal_id, lg.title, c.created_at
+            ORDER BY c.created_at DESC
+            """,
+            (user['id'],)
+        )
+    else:
+        collections = lakebase.run_query(
+            """
+            SELECT
+                c.id,
+                c.name,
+                c.description,
+                NULL::text AS learning_goal_id,
+                NULL::text AS learning_goal_title,
+                c.created_at,
+                COUNT(cp.paper_id) AS paper_count
+            FROM collections c
+            LEFT JOIN collection_papers cp ON cp.collection_id = c.id
+            WHERE c.user_id = %s
+            GROUP BY c.id, c.name, c.description, c.created_at
+            ORDER BY c.created_at DESC
+            """,
+            (user['id'],)
+        )
 
     for collection in collections:
         collection['papers'] = lakebase.run_query(
@@ -1367,23 +1450,49 @@ def collections():
             SELECT
                 p.id,
                 p.title,
+                p.abstract,
                 p.landing_page_url,
                 p.doi,
+                rp.status,
+                rp.progress_percentage,
                 cp.notes,
                 cp.added_at
             FROM collection_papers cp
             JOIN papers p ON p.id = cp.paper_id
+            LEFT JOIN reading_progress rp ON rp.paper_id = p.id AND rp.user_id = %s
             WHERE cp.collection_id = %s
             ORDER BY cp.added_at ASC, p.title ASC
             """,
-            (collection['id'],)
+            (user['id'], collection['id'])
         )
+
+        total_papers = len(collection['papers'])
+        completed_papers = sum(1 for paper in collection['papers'] if paper.get('status') == 'completed')
+        in_progress_papers = sum(1 for paper in collection['papers'] if paper.get('status') == 'in_progress')
+        collection['progress'] = int((completed_papers / total_papers) * 100) if total_papers else 0
+        collection['completed_papers'] = completed_papers
+        collection['in_progress_papers'] = in_progress_papers
+        collection['total_papers'] = total_papers
+        for paper in collection['papers']:
+            paper['summary'] = summarize_abstract(paper.get('abstract'))
+
+    learning_goals = lakebase.run_query(
+        """
+        SELECT id, title
+        FROM learning_goals
+        WHERE user_id = %s
+        ORDER BY created_at DESC
+        """,
+        (user['id'],)
+    )
 
     return render_template(
         "collections.html",
         active_tab='collections',
         current_user=user,
         collections=collections,
+        learning_goals=learning_goals,
+        collections_have_goal=collections_have_goal,
         search_results=search_results,
         search_query=search_query,
         search_mode=search_mode,
@@ -1399,8 +1508,10 @@ def api_collections_create():
     data = request.json or {}
     name = (data.get('name') or '').strip()
     description = (data.get('description') or '').strip()
+    learning_goal_id = (data.get('learning_goal_id') or '').strip()
     paper_ids = data.get('paper_ids') or []
     openalex_ids = data.get('openalex_ids') or []
+    collections_have_goal = table_has_column('collections', 'learning_goal_id')
 
     if not name:
         return jsonify({'success': False, 'error': 'Collection name is required'}), 400
@@ -1408,9 +1519,24 @@ def api_collections_create():
     if not paper_ids and not openalex_ids:
         return jsonify({'success': False, 'error': 'Select at least one paper'}), 400
 
+    if learning_goal_id and not collections_have_goal:
+        return jsonify({'success': False, 'error': 'Learning goal linking requires the collections learning_goal_id migration'}), 400
+
     try:
         with lakebase.get_connection() as conn:
             with conn.cursor() as cursor:
+                if learning_goal_id:
+                    cursor.execute(
+                        """
+                        SELECT id
+                        FROM learning_goals
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (learning_goal_id, user['id'])
+                    )
+                    if not cursor.fetchone():
+                        return jsonify({'success': False, 'error': 'Select a valid learning goal'}), 400
+
                 cursor.execute(
                     """
                     SELECT id FROM collections
@@ -1424,23 +1550,45 @@ def api_collections_create():
 
                 if existing:
                     collection_id = existing['id']
-                    cursor.execute(
-                        """
-                        UPDATE collections
-                        SET description = COALESCE(NULLIF(%s, ''), description), updated_at = NOW()
-                        WHERE id = %s
-                        """,
-                        (description, collection_id)
-                    )
+                    if collections_have_goal:
+                        cursor.execute(
+                            """
+                            UPDATE collections
+                            SET description = COALESCE(NULLIF(%s, ''), description),
+                                learning_goal_id = COALESCE(NULLIF(%s, ''), learning_goal_id),
+                                updated_at = NOW()
+                            WHERE id = %s
+                            """,
+                            (description, learning_goal_id, collection_id)
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            UPDATE collections
+                            SET description = COALESCE(NULLIF(%s, ''), description), updated_at = NOW()
+                            WHERE id = %s
+                            """,
+                            (description, collection_id)
+                        )
                 else:
-                    cursor.execute(
-                        """
-                        INSERT INTO collections (user_id, name, description)
-                        VALUES (%s, %s, %s)
-                        RETURNING id
-                        """,
-                        (user['id'], name, description)
-                    )
+                    if collections_have_goal:
+                        cursor.execute(
+                            """
+                            INSERT INTO collections (user_id, learning_goal_id, name, description)
+                            VALUES (%s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            (user['id'], learning_goal_id or None, name, description)
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO collections (user_id, name, description)
+                            VALUES (%s, %s, %s)
+                            RETURNING id
+                            """,
+                            (user['id'], name, description)
+                        )
                     collection_id = cursor.fetchone()['id']
 
                 for paper_id in paper_ids:

@@ -120,14 +120,17 @@ CREATE INDEX IF NOT EXISTS idx_learning_goals_status ON learning_goals (status);
 CREATE TABLE IF NOT EXISTS collections (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     user_id TEXT NOT NULL,
+    learning_goal_id TEXT,
     name TEXT NOT NULL,
     description TEXT,
     is_public BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (learning_goal_id) REFERENCES learning_goals(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_collections_user_id ON collections (user_id);
+CREATE INDEX IF NOT EXISTS idx_collections_learning_goal_id ON collections (learning_goal_id);
 CREATE INDEX IF NOT EXISTS idx_collections_is_public ON collections (is_public);
 
 -- ===========================
